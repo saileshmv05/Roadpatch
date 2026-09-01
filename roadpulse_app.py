@@ -218,6 +218,100 @@ st.markdown(
         line-height: 1.55;
     }
 
+    /* SPLASH SCREEN */
+    .splash-container {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: 
+            radial-gradient(ellipse 60% 40% at 50% -10%, rgba(255, 42, 84, 0.25) 0%, transparent 60%),
+            radial-gradient(circle at 10% 30%, rgba(0, 210, 255, 0.15) 0%, transparent 45%),
+            radial-gradient(circle at 90% 70%, rgba(255, 42, 84, 0.12) 0%, transparent 45%),
+            linear-gradient(135deg, #070A12 0%, #0a1420 50%, #070A12 100%);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 9999;
+        animation: splashFadeIn 0.6s ease-out;
+    }
+    
+    @keyframes splashFadeIn {
+        from {
+            opacity: 0;
+        }
+        to {
+            opacity: 1;
+        }
+    }
+    
+    .splash-content {
+        text-align: center;
+        animation: splashSlideUp 0.8s ease-out 0.1s both;
+        margin-bottom: 120px;
+    }
+    
+    @keyframes splashSlideUp {
+        from {
+            opacity: 0;
+            transform: translateY(30px);
+        }
+        to {
+            opacity: 1;
+            transform: translateY(0);
+        }
+    }
+    
+    .splash-logo {
+        font-size: 4rem;
+        margin-bottom: 16px;
+        display: inline-block;
+        animation: splashBounce 2s ease-in-out infinite;
+    }
+    
+    @keyframes splashBounce {
+        0%, 100% { transform: translateY(0); }
+        50% { transform: translateY(-10px); }
+    }
+    
+    .splash-title {
+        font-size: 3.5rem !important;
+        font-weight: 900 !important;
+        background: linear-gradient(135deg, #FFFFFF 20%, #FF2A54 50%, #00D2FF 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        margin: 0 0 12px 0 !important;
+        letter-spacing: -0.02em;
+    }
+    
+    .splash-subtitle {
+        font-size: 1.3rem;
+        color: #CBD5E1;
+        margin: 0 0 8px 0;
+        font-weight: 500;
+    }
+    
+    .splash-tagline {
+        font-size: 0.95rem;
+        color: #94A3B8;
+        margin: 0;
+        max-width: 400px;
+        margin-left: auto;
+        margin-right: auto;
+        line-height: 1.6;
+    }
+    
+    .splash-auth-box {
+        background: linear-gradient(135deg, rgba(28, 14, 28, 0.6) 0%, rgba(11, 18, 38, 0.6) 100%);
+        border: 1px solid rgba(255, 42, 84, 0.3);
+        border-radius: 24px;
+        padding: 36px 28px;
+        backdrop-filter: blur(20px);
+        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5), 0 0 40px rgba(255, 42, 84, 0.15);
+        animation: splashSlideUp 0.8s ease-out 0.2s both;
+    }
+
     /* Sidebar HUD Styling */
     section[data-testid="stSidebar"] {
         background: rgba(10, 14, 26, 0.95) !important;
@@ -1324,6 +1418,95 @@ def reviews_to_payload(df):
 
 
 # --------------------------------------------------------------------------
+# SPLASH SCREEN - SHOW IF NOT LOGGED IN
+# --------------------------------------------------------------------------
+if st.session_state.current_user is None:
+    # Splash screen full width
+    st.markdown(
+        """
+        <div class="splash-container">
+            <div class="splash-content">
+                <div class="splash-logo">🕷️</div>
+                <h1 class="splash-title">RoadPulse</h1>
+                <p class="splash-subtitle">Friendly Neighborhood Road Watch</p>
+                <p class="splash-tagline">Spot hazards. Verify with AI. Sling grievances to your city.</p>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    
+    # Centered auth UI
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        st.markdown("<div class='splash-auth-box'>", unsafe_allow_html=True)
+        
+        auth_tab, local_tab = st.tabs(["🔵 Google Sign In", "🕷️ Local Account"])
+        
+        with auth_tab:
+            st.markdown("<div style='text-align: center; padding: 20px;'>", unsafe_allow_html=True)
+            if st.session_state.get("_oauth_error"):
+                st.error(st.session_state._oauth_error)
+                st.session_state._oauth_error = None
+            
+            if st.session_state.get("_pending_google_email"):
+                pending_email = st.session_state._pending_google_email
+                st.success(f"✅ Authenticated as {pending_email}")
+                chosen_username = st.text_input("Pick a Spidey Handle", key="google_username_choice")
+                if st.button("Join the Web", key="google_join_btn", use_container_width=True):
+                    if not chosen_username.strip():
+                        st.error("Please enter a username.")
+                    else:
+                        ok, err = create_google_user(chosen_username.strip(), pending_email)
+                        if ok:
+                            st.session_state.current_user = chosen_username.strip()
+                            st.session_state._pending_google_email = None
+                            st.rerun()
+                        else:
+                            st.error(err)
+            else:
+                if GOOGLE_OAUTH_CLIENT_ID:
+                    if st.button("🔵 Sign in with Google", use_container_width=True):
+                        st.markdown(f"[Click here to continue]({build_google_auth_url()})", unsafe_allow_html=True)
+                else:
+                    st.caption("Google sign-in not configured.")
+            st.markdown("</div>", unsafe_allow_html=True)
+        
+        with local_tab:
+            login_signup_choice = st.radio("", ["Sign In", "Sign Up"], label_visibility="collapsed", horizontal=True)
+            
+            if login_signup_choice == "Sign In":
+                st.markdown("<div style='text-align: center;'>", unsafe_allow_html=True)
+                login_username = st.text_input("Handle", key="splash_login_username")
+                login_password = st.text_input("Password", type="password", key="splash_login_password")
+                if st.button("Sign In", key="splash_login_btn", use_container_width=True):
+                    if verify_user(login_username.strip(), login_password):
+                        st.session_state.current_user = login_username.strip()
+                        st.rerun()
+                    else:
+                        st.error("Invalid credentials.")
+                st.markdown("</div>", unsafe_allow_html=True)
+            else:
+                st.markdown("<div style='text-align: center;'>", unsafe_allow_html=True)
+                signup_username = st.text_input("Choose Handle", key="splash_signup_username")
+                signup_password = st.text_input("Password", type="password", key="splash_signup_password")
+                if st.button("Create Account", key="splash_signup_btn", use_container_width=True):
+                    if not signup_username.strip() or not signup_password:
+                        st.error("Both fields required.")
+                    else:
+                        ok, err = create_user(signup_username.strip(), signup_password)
+                        if ok:
+                            st.session_state.current_user = signup_username.strip()
+                            st.rerun()
+                        else:
+                            st.error(err)
+                st.markdown("</div>", unsafe_allow_html=True)
+        
+        st.markdown("</div>", unsafe_allow_html=True)
+    
+    st.stop()
+
+# --------------------------------------------------------------------------
 # SIDEBAR - INSTAGRAM-STYLE LEFT NAVIGATION
 # --------------------------------------------------------------------------
 st.sidebar.markdown('<div class="ig-logo">🕷️ RoadPulse</div>', unsafe_allow_html=True)
@@ -1340,67 +1523,6 @@ st.session_state.nav_page = _nav_choice
 nav_page = _nav_choice.split("  ", 1)[1].strip()
 
 st.sidebar.markdown("---")
-
-# --------------------------------------------------------------------------
-# SIDEBAR - ACCOUNT
-# --------------------------------------------------------------------------
-if st.session_state.current_user is None:
-    st.sidebar.subheader("🕷️ Web-Watch Sign In")
-
-    if st.session_state.get("_oauth_error"):
-        st.sidebar.error(st.session_state._oauth_error)
-        st.session_state._oauth_error = None
-
-    if st.session_state.get("_pending_google_email"):
-        pending_email = st.session_state._pending_google_email
-        st.sidebar.success(f"Authenticated as {pending_email}")
-        chosen_username = st.sidebar.text_input("Pick a Spidey Handle", key="google_username_choice")
-        if st.sidebar.button("Join the Web"):
-            if not chosen_username.strip():
-                st.sidebar.error("Please enter a username.")
-            else:
-                ok, err = create_google_user(chosen_username.strip(), pending_email)
-                if ok:
-                    st.session_state.current_user = chosen_username.strip()
-                    st.session_state._pending_google_email = None
-                    st.rerun()
-                else:
-                    st.sidebar.error(err)
-    else:
-        if GOOGLE_OAUTH_CLIENT_ID:
-            st.sidebar.link_button("🔵 Sign in with Google", build_google_auth_url())
-        else:
-            st.sidebar.caption("Google sign-in optional.")
-
-        with st.sidebar.expander("Local Citizen Account"):
-            login_tab, signup_tab = st.tabs(["Sign In", "Sign Up"])
-
-            with login_tab:
-                login_username = st.text_input("Handle", key="login_username")
-                login_password = st.text_input("Password", type="password", key="login_password")
-                if st.button("Sign In", key="login_btn"):
-                    if verify_user(login_username.strip(), login_password):
-                        st.session_state.current_user = login_username.strip()
-                        st.rerun()
-                    else:
-                        st.error("Invalid credentials.")
-
-            with signup_tab:
-                signup_username = st.text_input("Choose Handle", key="signup_username")
-                signup_password = st.text_input("Password", type="password", key="signup_password")
-                if st.button("Create Account", key="signup_btn"):
-                    if not signup_username.strip() or not signup_password:
-                        st.error("Both fields required.")
-                    else:
-                        ok, err = create_user(signup_username.strip(), signup_password)
-                        if ok:
-                            st.session_state.current_user = signup_username.strip()
-                            st.rerun()
-                        else:
-                            st.error(err)
-else:
-    # User logged in - sidebar clean, all profile in Profile page
-    pass
 
 # --------------------------------------------------------------------------
 # MAIN UI
