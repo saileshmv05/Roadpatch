@@ -231,12 +231,35 @@ st.markdown(
 
     /* Spidey Profile Card */
     .spidey-profile-card {
-        background: linear-gradient(135deg, rgba(38, 14, 28, 0.75) 0%, rgba(13, 22, 45, 0.85) 100%);
-        border: 1px solid rgba(255, 42, 84, 0.35);
-        border-radius: 16px;
-        padding: 16px 18px;
-        margin-bottom: 14px;
-        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35), 0 0 16px rgba(255, 42, 84, 0.15);
+        display: none;
+    }
+    
+    /* Top-right user profile area */
+    .ig-user-profile {
+        position: fixed;
+        top: 16px;
+        right: 50px;
+        z-index: 999998;
+        display: flex;
+        flex-direction: column;
+        align-items: flex-end;
+        gap: 4px;
+        padding: 0;
+    }
+    
+    .ig-user-profile-name {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-weight: 800;
+        font-size: 14px;
+        color: #FFFFFF;
+    }
+    
+    .ig-user-profile-badge {
+        font-size: 11px;
+        font-weight: 600;
+        color: #FF8099;
     }
     .spidey-points-pill {
         display: inline-block;
@@ -1420,11 +1443,12 @@ if st.session_state.current_user is None:
                             st.error(err)
 else:
     score = get_civic_score(st.session_state.current_user)
-    st.sidebar.markdown(
+    # User profile moved to top-right
+    st.markdown(
         f"""
-        <div class="spidey-profile-card">
-            <div style="font-weight:800; font-size:1.05rem; margin-bottom:4px;">🕷️ {st.session_state.current_user}</div>
-            <div style="font-size:12px; font-weight:600; color:#FF8099;">{civic_badge(score)}</div>
+        <div class="ig-user-profile">
+            <div class="ig-user-profile-name">🕷️ {st.session_state.current_user}</div>
+            <div class="ig-user-profile-badge">{civic_badge(score)}</div>
         </div>
         """,
         unsafe_allow_html=True,
