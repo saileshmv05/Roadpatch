@@ -47,12 +47,14 @@ Features in this version:
     - Municipal Repair Priority Heatmap (Google Maps visualization library).
     - SLA countdown timer: a public 30-day repair clock on severe, open issues.
     - Municipal complaint auto-fill: known real portal for Chennai, reverse-
-      geocoded generic fallback everywhere else. Optional AI (Groq) button
-      to polish the complaint wording - needs GROQ_API_KEY, degrades gracefully.
+      geocoded generic fallback everywhere else. Optional AI (Groq /
+      openai/gpt-oss-120b) button to polish the complaint wording - needs
+      GROQ_API_KEY, degrades gracefully.
     - Computer Vision damage verification: an uploaded photo is checked by
-      Groq vision to confirm it's actually road damage (filters out
-      irrelevant/joke images) and classify severity, auto-filling the
-      category/rating. Reuses GROQ_API_KEY - no separate key needed.
+      an open-source vision model (Qwen 3.6 27B, served via Groq) to
+      confirm it's actually road damage (filters out irrelevant/joke
+      images) and classify severity, auto-filling the category/rating.
+      Reuses GROQ_API_KEY - no separate key needed.
     - Community News Feed: real Google News RSS headlines about road issues,
       upvotable by the community (NOT Facebook scraping - see comment on
       fetch_news_rss for why that's off the table).
@@ -64,7 +66,6 @@ good enough for a hackathon demo, but a real deployment would want salted
 hashing (bcrypt/argon2) and proper session/token management.
 """
 
-import base64
 import hashlib
 import json
 import os
@@ -995,8 +996,14 @@ SEVERITY_TO_RATING = {"Mild": 3, "Severe": 2, "Critical": 1}
 
 def analyze_road_photo(image_bytes, mime_type="image/jpeg"):
     """
-    Sends an uploaded photo to Groq to (a) verify it actually shows road
-    damage and (b) classify severity and category if it does. 
+    Sends an uploaded photo to Qwen 3.6 27B (an open-weight, Apache-2.0
+    vision-language model, served fast via Groq) to (a) verify it actually
+    shows road damage - not a meme, a selfie, an unrelated object, etc. -
+    and (b) classify severity and category if it does. This is what makes
+    the photo-upload step scam-resistant instead of just trusting any
+    image a citizen attaches. Returns (result_dict, error_message) -
+    exactly one is None. Reuses GROQ_API_KEY (same key already used for
+    complaint wording) - no separate setup needed.
     """
     try:
         from groq import Groq
@@ -1021,25 +1028,26 @@ def analyze_road_photo(image_bytes, mime_type="image/jpeg"):
     )
 
     try:
-        client = Groq(api_key=api_key)
-        # Groq requires images to be passed as base64 data URIs
-        base64_image = base64.b64encode(image_bytes).decode('utf-8')
-        image_url = f"data:{mime_type};base64,{base64_image}"
+        import base64
 
+        client = Groq(api_key=api_key)
+        b64_image = base64.b64encode(image_bytes).decode("utf-8")
         response = client.chat.completions.create(
-            model="llama-3.2-11b-vision-instruct",
+            model="qwen/qwen3.6-27b",
             messages=[
                 {
                     "role": "user",
                     "content": [
                         {"type": "text", "text": prompt},
-                        {"type": "image_url", "image_url": {"url": image_url}}
-                    ]
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:{mime_type};base64,{b64_image}"},
+                        },
+                    ],
                 }
             ],
-            temperature=0.0
+            response_format={"type": "json_object"},
         )
-        
         raw_text = response.choices[0].message.content.strip()
         if raw_text.startswith("```"):
             raw_text = raw_text.strip("`")
@@ -1047,15 +1055,19 @@ def analyze_road_photo(image_bytes, mime_type="image/jpeg"):
                 raw_text = raw_text[4:]
         data = json.loads(raw_text.strip())
         return data, None
-    except Exception as exc: 
+    except Exception as exc:  # noqa: BLE001 - surface any API/parsing failure to the UI
         return None, f"Photo analysis failed: {exc}"
 
 
 def polish_complaint_with_ai(details_text, category, rating, location_name):
     """
-    Sends the plain complaint text to Groq and asks for a more
+    Optional: sends the plain complaint text to Groq (openai/gpt-oss-120b,
+    an open-weight OpenAI model served fast via Groq) and asks for a more
     formal, persuasive rewrite suitable for an official government
-    complaint form.
+    complaint form - still capped at the real 400-char field limit.
+    Returns (polished_text, error_message) - exactly one is None. Fails
+    safely (returns an error message, not an exception) if the 'groq'
+    package or GROQ_API_KEY isn't set up.
     """
     try:
         from groq import Groq
@@ -1078,14 +1090,16 @@ def polish_complaint_with_ai(details_text, category, rating, location_name):
 
     try:
         client = Groq(api_key=api_key)
+        # Model name per Groq's own deprecation notice (llama-3.3-70b-versatile
+        # was retired) - update this string again if Groq renames its
+        # recommended open-weight text model in the future.
         response = client.chat.completions.create(
-            model="qwen/qwen3.6-27b",
+            model="openai/gpt-oss-120b",
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.3
         )
         polished = response.choices[0].message.content.strip().strip('"')
         return polished[:GCC_DETAILS_MAX_CHARS], None
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - surface any API failure to the UI
         return None, f"AI rewrite failed: {exc}"
 
 
@@ -1115,7 +1129,7 @@ def build_civic_complaint(row, municipality_info, is_known_portal):
 
 def geocode_location(query):
     """Free, no-API-key location search via OpenStreetMap's Nominatim."""
-    url = "[https://nominatim.openstreetmap.org/search](https://nominatim.openstreetmap.org/search)?" + urllib.parse.urlencode(
+    url = "https://nominatim.openstreetmap.org/search?" + urllib.parse.urlencode(
         {"q": query, "format": "json", "limit": 1}
     )
     request = urllib.request.Request(url, headers={"User-Agent": "RoadPulse-Hackathon-Prototype/1.0"})
@@ -1140,7 +1154,7 @@ def get_location_name(lat, lon):
     Cached for an hour (same pattern as the other geocoding calls) since
     Nominatim asks callers not to hammer it with repeat requests.
     """
-    url = "[https://nominatim.openstreetmap.org/reverse](https://nominatim.openstreetmap.org/reverse)?" + urllib.parse.urlencode(
+    url = "https://nominatim.openstreetmap.org/reverse?" + urllib.parse.urlencode(
         {"lat": lat, "lon": lon, "format": "json", "zoom": 18, "addressdetails": 0}
     )
     request = urllib.request.Request(url, headers={"User-Agent": "RoadPulse-Hackathon-Prototype/1.0"})
@@ -1318,7 +1332,7 @@ else:
     # the stronger anti-AI-image safeguard (no file picker to upload a
     # pre-existing/synthetic image from), but not everyone can safely stop
     # and shoot a photo mid-drive, so upload-from-device stays available
-    # too. The Groq "looks_ai_generated" check below is the safety net
+    # too. The AI "looks_ai_generated" check below is the safety net
     # for the upload path - a soft signal, not a guarantee either way.
     st.sidebar.caption("📸 Optional: add a photo, then verify it with AI")
     photo_method = st.sidebar.radio(
@@ -1683,7 +1697,7 @@ with tab_news:
     st.markdown(
         """
         <style>
-        @import url('[https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700;900&display=swap](https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700;900&display=swap)');
+        @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700;900&display=swap');
         .bugle-masthead {
             border-top: 4px solid #f5f3ee; border-bottom: 4px solid #f5f3ee;
             padding: 10px 0; margin-bottom: 14px; text-align: center;
