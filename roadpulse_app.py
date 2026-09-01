@@ -566,6 +566,30 @@ st.markdown(
     .ig-post-meta { padding: 10px 12px; }
     .ig-post-loc { font-size: 12.5px; font-weight: 700; color: #fff; margin-bottom: 3px; }
     .ig-post-date { font-size: 11px; color: var(--text-dim); }
+
+    /* ---------------------------------------------------------------- */
+    /* HOVER-TO-EXPAND SIDEBAR (Instagram collapsed-icon nav)             */
+    /* ---------------------------------------------------------------- */
+    section[data-testid="stSidebar"] {
+        width: 84px !important;
+        min-width: 84px !important;
+        max-width: 84px !important;
+        transition: width 0.28s ease, min-width 0.28s ease, max-width 0.28s ease;
+        overflow-x: hidden;
+        z-index: 100000;
+    }
+    section[data-testid="stSidebar"]:hover {
+        width: 300px !important;
+        min-width: 300px !important;
+        max-width: 300px !important;
+        overflow-x: visible;
+    }
+    section[data-testid="stSidebar"] * {
+        white-space: nowrap !important;
+    }
+    section[data-testid="stSidebar"] div[data-testid="stSidebarContent"] {
+        overflow-x: hidden;
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -1426,21 +1450,22 @@ else:
 # --------------------------------------------------------------------------
 # MAIN UI
 # --------------------------------------------------------------------------
-st.markdown(
-    """
-    <div class="hero-header">
-        <div class="spidey-radar-badge">🕷️ SPIDEY-SENSE: ACTIVE & MONITORING</div>
-        <h1 class="hero-title">RoadPulse · Friendly Neighborhood Watch</h1>
-        <p class="hero-subtitle">
-            With great roads comes great responsibility. Spot hazards, verify with AI,
-            and sling grievances directly to your municipal corporation.
-        </p>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
+if nav_page == "Dashboard":
+    st.markdown(
+        """
+        <div class="hero-header">
+            <div class="spidey-radar-badge">🕷️ SPIDEY-SENSE: ACTIVE & MONITORING</div>
+            <h1 class="hero-title">RoadPulse · Friendly Neighborhood Watch</h1>
+            <p class="hero-subtitle">
+                With great roads comes great responsibility. Spot hazards, verify with AI,
+                and sling grievances directly to your municipal corporation.
+            </p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
-if not GOOGLE_MAPS_API_KEY:
+if nav_page == "Map" and not GOOGLE_MAPS_API_KEY:
     st.warning("Google Maps API key not detected. Set GOOGLE_MAPS_API_KEY in environment.")
 
 # --------------------------------------------------------------------------
@@ -1528,62 +1553,15 @@ elif nav_page == "Map":
         )
     is_heatmap_view = "Heatmap" in str(view_choice)
 
-    col_map, col_stats = st.columns([3.2, 1])
+    col_map, col_side = st.columns([3.2, 1])
 
-    with col_stats:
-        st.metric("Total Hazards Trapped", len(reviews_df))
-        if not reviews_df.empty:
-            st.metric("Mean Road Quality", f"{reviews_df['rating'].mean():.1f} ⭐")
-            open_severe = ((reviews_df["rating"] <= 2) & (reviews_df["status"] == "Open")).sum()
-            st.metric("Severe Open Hazards", int(open_severe))
-
+    with col_side:
+        st.markdown("##### 📝 File a Complaint")
         if is_heatmap_view:
             st.caption("🔴 Red = Critical Unfixed &nbsp;|&nbsp; 🟢 Green = Fixed")
         else:
             st.caption("Use the ✏️ Draw Segment tool on top-right of the map to trace road spans.")
 
-    with col_map:
-        if GOOGLE_MAPS_API_KEY:
-            zoom_level = 13 if st.session_state.map_center == CHENNAI_COORDS else 15
-
-            if is_heatmap_view:
-                gmaps_component(
-                    api_key=GOOGLE_MAPS_API_KEY,
-                    center={"lat": CHENNAI_COORDS[0], "lng": CHENNAI_COORDS[1]},
-                    zoom=12,
-                    reviews=reviews_to_payload(reviews_df),
-                    enable_picker=False,
-                    show_heatmap=True,
-                    key="heatmap",
-                    default=None,
-                )
-            else:
-                picker_result = gmaps_component(
-                    api_key=GOOGLE_MAPS_API_KEY,
-                    center={"lat": st.session_state.map_center[0], "lng": st.session_state.map_center[1]},
-                    zoom=zoom_level,
-                    reviews=reviews_to_payload(reviews_df),
-                    enable_picker=True,
-                    show_heatmap=False,
-                    key="road_map",
-                    default=None,
-                )
-
-                if picker_result and picker_result != st.session_state._last_picker_raw:
-                    st.session_state._last_picker_raw = picker_result
-                    if picker_result.get("type") == "click":
-                        st.session_state.clicked_lat = picker_result["lat"]
-                        st.session_state.clicked_lon = picker_result["lng"]
-                        st.session_state.segment_coords = None
-                    elif picker_result.get("type") == "drawing":
-                        st.session_state.segment_coords = picker_result["path"]
-                        st.session_state.clicked_lat = None
-                        st.session_state.clicked_lon = None
-        else:
-            st.info("Map awaiting Google Maps API key credentials.")
-
-    st.markdown("---")
-    with st.expander("📝 File a Complaint", expanded=False):
         if st.session_state.current_user is None:
             st.info("Sign in from the sidebar to file a complaint.")
         else:
@@ -1729,12 +1707,63 @@ elif nav_page == "Map":
                                     st.session_state[key] = None
                                 st.rerun()
 
+    with col_map:
+        if GOOGLE_MAPS_API_KEY:
+            zoom_level = 13 if st.session_state.map_center == CHENNAI_COORDS else 15
+
+            if is_heatmap_view:
+                gmaps_component(
+                    api_key=GOOGLE_MAPS_API_KEY,
+                    center={"lat": CHENNAI_COORDS[0], "lng": CHENNAI_COORDS[1]},
+                    zoom=12,
+                    reviews=reviews_to_payload(reviews_df),
+                    enable_picker=False,
+                    show_heatmap=True,
+                    key="heatmap",
+                    default=None,
+                )
+            else:
+                picker_result = gmaps_component(
+                    api_key=GOOGLE_MAPS_API_KEY,
+                    center={"lat": st.session_state.map_center[0], "lng": st.session_state.map_center[1]},
+                    zoom=zoom_level,
+                    reviews=reviews_to_payload(reviews_df),
+                    enable_picker=True,
+                    show_heatmap=False,
+                    key="road_map",
+                    default=None,
+                )
+
+                if picker_result and picker_result != st.session_state._last_picker_raw:
+                    st.session_state._last_picker_raw = picker_result
+                    if picker_result.get("type") == "click":
+                        st.session_state.clicked_lat = picker_result["lat"]
+                        st.session_state.clicked_lon = picker_result["lng"]
+                        st.session_state.segment_coords = None
+                    elif picker_result.get("type") == "drawing":
+                        st.session_state.segment_coords = picker_result["path"]
+                        st.session_state.clicked_lat = None
+                        st.session_state.clicked_lon = None
+        else:
+            st.info("Map awaiting Google Maps API key credentials.")
+
 # ----- PAGE: COMMUNITY -------
 elif nav_page == "Community":
     st.subheader("💬 Community Web Feed")
     st.caption("All reported road defects, photo evidence, civic endorsements, and repair confirmations.")
 
     all_reviews = fetch_all_reviews()
+
+    col_stat1, col_stat2, col_stat3 = st.columns(3)
+    with col_stat1:
+        st.metric("Total Hazards Trapped", len(all_reviews))
+    with col_stat2:
+        st.metric("Mean Road Quality", f"{all_reviews['rating'].mean():.1f} ⭐" if not all_reviews.empty else "—")
+    with col_stat3:
+        open_severe = ((all_reviews["rating"] <= 2) & (all_reviews["status"] == "Open")).sum() if not all_reviews.empty else 0
+        st.metric("Severe Open Hazards", int(open_severe))
+
+    st.markdown("---")
 
     if all_reviews.empty:
         st.info("No hazards on the web yet. Pin a road in the sidebar to report one!")
@@ -1973,9 +2002,7 @@ elif nav_page == "News Feed":
 # ----- PAGE: PROFILE (Instagram-style) -------
 elif nav_page == "Profile":
     if st.session_state.current_user is None:
-        st.markdown('<div class="hero-header">', unsafe_allow_html=True)
         st.info("🕸️ Sign in from the sidebar to see your Spidey profile.")
-        st.markdown('</div>', unsafe_allow_html=True)
     else:
         username = st.session_state.current_user
         score = get_civic_score(username)
