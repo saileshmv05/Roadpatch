@@ -233,34 +233,6 @@ st.markdown(
     .spidey-profile-card {
         display: none;
     }
-    
-    /* Top-right user profile area */
-    .ig-user-profile {
-        position: fixed;
-        top: 16px;
-        right: 50px;
-        z-index: 999998;
-        display: flex;
-        flex-direction: column;
-        align-items: flex-end;
-        gap: 4px;
-        padding: 0;
-    }
-    
-    .ig-user-profile-name {
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        font-weight: 800;
-        font-size: 14px;
-        color: #FFFFFF;
-    }
-    
-    .ig-user-profile-badge {
-        font-size: 11px;
-        font-weight: 600;
-        color: #FF8099;
-    }
     .spidey-points-pill {
         display: inline-block;
         background: linear-gradient(135deg, rgba(255, 42, 84, 0.2) 0%, rgba(0, 210, 255, 0.2) 100%);
@@ -468,23 +440,8 @@ st.markdown(
     /* TOP-RIGHT FLOATING CIVIC SCORE BADGE                               */
     /* ---------------------------------------------------------------- */
     .ig-top-score {
-        position: fixed;
-        top: 18px;
-        right: 34px;
-        z-index: 999999;
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        background: linear-gradient(135deg, rgba(255, 42, 84, 0.22) 0%, rgba(0, 210, 255, 0.18) 100%);
-        border: 1px solid rgba(255, 255, 255, 0.25);
-        backdrop-filter: blur(16px);
-        padding: 8px 18px;
-        border-radius: 9999px;
-        box-shadow: 0 8px 24px rgba(0,0,0,0.4), 0 0 16px rgba(255, 42, 84, 0.2);
+        display: none;
     }
-    .ig-top-score .star { color: #FFD166; font-size: 15px; }
-    .ig-top-score .num { font-weight: 900; font-size: 15px; color: #FFFFFF; }
-    .ig-top-score .lbl { font-size: 10px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: #CBD5E1; }
 
     /* ---------------------------------------------------------------- */
     /* NEWS TICKER BAR                                                    */
@@ -1442,34 +1399,8 @@ if st.session_state.current_user is None:
                         else:
                             st.error(err)
 else:
-    score = get_civic_score(st.session_state.current_user)
-    # User profile moved to top-right
-    st.markdown(
-        f"""
-        <div class="ig-user-profile">
-            <div class="ig-user-profile-name">🕷️ {st.session_state.current_user}</div>
-            <div class="ig-user-profile-badge">{civic_badge(score)}</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-    if st.sidebar.button("Log Out"):
-        st.session_state.current_user = None
-        st.rerun()
-
-    # Floating top-right civic score badge (Instagram-style top bar)
-    st.markdown(
-        f"""
-        <div class="ig-top-score">
-            <span class="star">★</span>
-            <div>
-                <div class="num">{score}</div>
-                <div class="lbl">Civic Score</div>
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    # User logged in - sidebar clean, all profile in Profile page
+    pass
 
 # --------------------------------------------------------------------------
 # MAIN UI
