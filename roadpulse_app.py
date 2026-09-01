@@ -1027,7 +1027,7 @@ def analyze_road_photo(image_bytes, mime_type="image/jpeg"):
         image_url = f"data:{mime_type};base64,{base64_image}"
 
         response = client.chat.completions.create(
-            model="llama-3.2-11b-vision-preview",
+            model="llama-3.2-11b-vision-instruct",
             messages=[
                 {
                     "role": "user",
