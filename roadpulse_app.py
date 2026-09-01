@@ -1,5 +1,5 @@
 """
-RoadPulse - "Civic Intelligence & Road Quality Infrastructure Platform"
+RoadPulse - "Friendly Neighborhood Road Watch // Spidey Edition"
 A sleek, modern civic platform prototype built with Streamlit + Google Maps + SQLite + Groq.
 
 Run with:
@@ -71,7 +71,7 @@ def reverse_geocode(lat, lon):
     url = "https://nominatim.openstreetmap.org/reverse?" + urllib.parse.urlencode(
         {"lat": lat, "lon": lon, "format": "json", "zoom": 10, "addressdetails": 1}
     )
-    request = urllib.request.Request(url, headers={"User-Agent": "RoadPulse-Civic-Platform/2.0"})
+    request = urllib.request.Request(url, headers={"User-Agent": "RoadPulse-Spidey-Watch/3.0"})
     try:
         with urllib.request.urlopen(request, timeout=6) as response:
             data = json.loads(response.read().decode("utf-8"))
@@ -114,261 +114,288 @@ GOOGLE_OAUTH_CLIENT_SECRET = os.environ.get("GOOGLE_OAUTH_CLIENT_SECRET", "")
 GOOGLE_OAUTH_REDIRECT_URI = os.environ.get("GOOGLE_OAUTH_REDIRECT_URI", "http://localhost:8501")
 
 st.set_page_config(
-    page_title="RoadPulse · Civic Road Intelligence",
-    page_icon="⚡",
+    page_title="RoadPulse · Spidey Watch Edition",
+    page_icon="🕷️",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 # --------------------------------------------------------------------------
-# SLEEK, POLISHED, PREMIUM DESIGN SYSTEM
+# SPIDER-VERSE // CYBER-SUIT HUD PREMIUM THEME
 # --------------------------------------------------------------------------
 st.markdown(
     """
     <style>
-    @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;600;700&family=Cinzel:wght@700;900&display=swap');
 
     :root {
-        --primary: #6366F1;
-        --primary-glow: rgba(99, 102, 241, 0.28);
-        --accent: #10B981;
-        --accent-glow: rgba(16, 185, 129, 0.22);
-        --warning: #F59E0B;
-        --danger: #EF4444;
-        --bg-dark: #090D16;
-        --bg-card: rgba(17, 24, 39, 0.75);
-        --bg-card-hover: rgba(24, 33, 53, 0.85);
-        --border-subtle: rgba(255, 255, 255, 0.08);
-        --border-glow: rgba(99, 102, 241, 0.4);
-        --text-main: #F8FAFC;
-        --text-muted: #94A3B8;
-        --text-subtle: #64748B;
+        --spidey-red: #FF2A54;
+        --spidey-red-glow: rgba(255, 42, 84, 0.35);
+        --spidey-blue: #00D2FF;
+        --spidey-blue-glow: rgba(0, 210, 255, 0.25);
+        --spidey-dark: #070A12;
+        --spidey-card: rgba(15, 20, 36, 0.78);
+        --spidey-border: rgba(255, 255, 255, 0.09);
+        --text-pure: #FFFFFF;
+        --text-dim: #94A3B8;
     }
 
     * {
-        font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+        font-family: 'Plus Jakarta Sans', sans-serif;
     }
 
+    /* Ambient Spider-Verse Mesh Glow + Web Lattice Pattern */
     .stApp {
         background:
-            radial-gradient(ellipse 80% 50% at 50% -20%, rgba(99, 102, 241, 0.15) 0%, transparent 60%),
-            radial-gradient(circle at 10% 25%, rgba(16, 185, 129, 0.08) 0%, transparent 40%),
-            radial-gradient(circle at 90% 75%, rgba(99, 102, 241, 0.06) 0%, transparent 45%),
-            #090D16;
-        color: var(--text-main);
+            radial-gradient(ellipse 60% 40% at 50% -10%, rgba(255, 42, 84, 0.18) 0%, transparent 60%),
+            radial-gradient(circle at 10% 30%, rgba(0, 210, 255, 0.1) 0%, transparent 45%),
+            radial-gradient(circle at 90% 70%, rgba(255, 42, 84, 0.08) 0%, transparent 45%),
+            repeating-radial-gradient(circle at 50% 50%,
+                rgba(255, 42, 84, 0.02) 0px, rgba(255, 42, 84, 0.02) 1px,
+                transparent 1px, transparent 60px),
+            #070A12;
+        color: var(--text-pure);
     }
 
     /* Headings */
     h1, h2, h3, h4, h5, h6 {
         font-family: 'Plus Jakarta Sans', sans-serif !important;
-        font-weight: 700 !important;
+        font-weight: 800 !important;
         letter-spacing: -0.02em !important;
         color: #FFFFFF !important;
-        text-shadow: none !important;
+        text-shadow: 0 0 20px rgba(255, 42, 84, 0.2) !important;
     }
 
-    /* Premium Sleek Hero Header */
+    /* Spidey Hero Header */
     .hero-header {
         position: relative;
-        background: linear-gradient(135deg, rgba(26, 34, 56, 0.7) 0%, rgba(15, 23, 42, 0.85) 100%);
-        border: 1px solid rgba(255, 255, 255, 0.1);
-        border-radius: 18px;
-        padding: 26px 32px;
+        background: linear-gradient(135deg, rgba(28, 14, 28, 0.85) 0%, rgba(11, 18, 38, 0.88) 100%);
+        border: 1px solid rgba(255, 42, 84, 0.25);
+        border-radius: 20px;
+        padding: 28px 34px;
         margin-bottom: 24px;
-        backdrop-filter: blur(16px);
-        box-shadow: 0 12px 36px -8px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+        backdrop-filter: blur(20px);
+        box-shadow: 0 16px 40px -10px rgba(0, 0, 0, 0.6), 0 0 30px rgba(255, 42, 84, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.15);
         overflow: hidden;
     }
     .hero-header::before {
         content: '';
         position: absolute;
-        top: 0; left: 0; right: 0; height: 2px;
-        background: linear-gradient(90deg, transparent, #6366F1, #10B981, transparent);
+        top: 0; left: 0; right: 0; height: 3px;
+        background: linear-gradient(90deg, transparent, #FF2A54, #00D2FF, #FF2A54, transparent);
     }
-    .hero-badge {
+    .spidey-radar-badge {
         display: inline-flex;
         align-items: center;
-        gap: 6px;
+        gap: 8px;
         font-family: 'JetBrains Mono', monospace;
         font-size: 11px;
-        font-weight: 600;
-        letter-spacing: 0.06em;
+        font-weight: 700;
+        letter-spacing: 0.08em;
         text-transform: uppercase;
-        color: #A5B4FC;
-        background: rgba(99, 102, 241, 0.15);
-        border: 1px solid rgba(99, 102, 241, 0.35);
-        padding: 4px 12px;
+        color: #FF2A54;
+        background: rgba(255, 42, 84, 0.12);
+        border: 1px solid rgba(255, 42, 84, 0.4);
+        padding: 5px 14px;
         border-radius: 9999px;
-        margin-bottom: 10px;
+        margin-bottom: 12px;
+        box-shadow: 0 0 14px rgba(255, 42, 84, 0.25);
     }
     .hero-title {
-        font-size: 2.1rem !important;
-        font-weight: 800 !important;
-        background: linear-gradient(135deg, #FFFFFF 30%, #CBD5E1 100%);
+        font-size: 2.25rem !important;
+        font-weight: 900 !important;
+        background: linear-gradient(135deg, #FFFFFF 20%, #FF8099 70%, #00D2FF 100%);
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
-        margin: 0 0 6px 0 !important;
+        margin: 0 0 8px 0 !important;
     }
     .hero-subtitle {
-        color: #94A3B8;
+        color: #CBD5E1;
         font-size: 0.98rem;
         margin: 0;
         max-width: 680px;
-        line-height: 1.5;
+        line-height: 1.55;
     }
 
-    /* Sidebar Glassmorphism */
+    /* Sidebar HUD Styling */
     section[data-testid="stSidebar"] {
-        background: rgba(11, 16, 28, 0.92) !important;
-        border-right: 1px solid var(--border-subtle) !important;
-        backdrop-filter: blur(20px);
+        background: rgba(10, 14, 26, 0.95) !important;
+        border-right: 1px solid rgba(255, 42, 84, 0.2) !important;
+        backdrop-filter: blur(24px);
     }
     section[data-testid="stSidebar"] hr {
         border-color: rgba(255, 255, 255, 0.08) !important;
-        margin: 20px 0;
+        margin: 18px 0;
     }
 
-    /* Profile / Badge Card */
-    .user-profile-card {
-        background: linear-gradient(135deg, rgba(30, 41, 69, 0.7) 0%, rgba(17, 24, 39, 0.85) 100%);
-        border: 1px solid rgba(99, 102, 241, 0.3);
-        border-radius: 14px;
-        padding: 16px;
-        margin-bottom: 12px;
-        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25);
+    /* Spidey Profile Card */
+    .spidey-profile-card {
+        background: linear-gradient(135deg, rgba(38, 14, 28, 0.75) 0%, rgba(13, 22, 45, 0.85) 100%);
+        border: 1px solid rgba(255, 42, 84, 0.35);
+        border-radius: 16px;
+        padding: 16px 18px;
+        margin-bottom: 14px;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35), 0 0 16px rgba(255, 42, 84, 0.15);
     }
-    .user-profile-card b {
-        color: #F8FAFC;
-    }
-    .civic-score-pill {
+    .spidey-points-pill {
         display: inline-block;
-        background: rgba(16, 185, 129, 0.15);
-        color: #34D399;
-        border: 1px solid rgba(16, 185, 129, 0.3);
-        padding: 2px 10px;
+        background: linear-gradient(135deg, rgba(255, 42, 84, 0.2) 0%, rgba(0, 210, 255, 0.2) 100%);
+        color: #FFFFFF;
+        border: 1px solid rgba(255, 255, 255, 0.25);
+        padding: 3px 12px;
         border-radius: 9999px;
         font-size: 12px;
-        font-weight: 700;
+        font-weight: 800;
+        box-shadow: 0 0 10px rgba(0, 210, 255, 0.2);
     }
 
     /* Tabs Styling */
     .stTabs [data-baseweb="tab-list"] {
-        gap: 8px;
-        background: rgba(15, 23, 42, 0.6);
+        gap: 10px;
+        background: rgba(14, 18, 32, 0.75);
         padding: 6px;
-        border-radius: 12px;
-        border: 1px solid var(--border-subtle);
-        margin-bottom: 20px;
+        border-radius: 14px;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        margin-bottom: 22px;
     }
     .stTabs [data-baseweb="tab"] {
-        border-radius: 8px !important;
-        padding: 8px 18px !important;
-        font-weight: 600 !important;
+        border-radius: 10px !important;
+        padding: 10px 20px !important;
+        font-weight: 700 !important;
         font-size: 13px !important;
-        letter-spacing: 0.01em;
-        color: var(--text-muted) !important;
+        letter-spacing: 0.02em;
+        color: var(--text-dim) !important;
         border: none !important;
         background: transparent !important;
-        transition: all 0.2s ease;
+        transition: all 0.25s ease;
     }
     .stTabs [aria-selected="true"] {
-        background: linear-gradient(135deg, rgba(99, 102, 241, 0.25) 0%, rgba(79, 70, 229, 0.15) 100%) !important;
+        background: linear-gradient(135deg, rgba(255, 42, 84, 0.25) 0%, rgba(0, 210, 255, 0.18) 100%) !important;
         color: #FFFFFF !important;
-        border: 1px solid rgba(99, 102, 241, 0.4) !important;
-        box-shadow: 0 2px 12px rgba(99, 102, 241, 0.2);
+        border: 1px solid rgba(255, 42, 84, 0.45) !important;
+        box-shadow: 0 4px 16px rgba(255, 42, 84, 0.25) !important;
     }
 
-    /* Premium Buttons */
+    /* Dual-Tone Action Buttons */
     div.stButton > button, div.stLinkButton > a, .stForm button {
-        background: linear-gradient(135deg, #4F46E5 0%, #4338CA 100%) !important;
+        background: linear-gradient(135deg, #FF2A54 0%, #B80036 100%) !important;
         color: #FFFFFF !important;
-        border: 1px solid rgba(255, 255, 255, 0.15) !important;
-        border-radius: 10px !important;
-        padding: 8px 18px !important;
-        font-weight: 600 !important;
+        border: 1px solid rgba(255, 255, 255, 0.25) !important;
+        border-radius: 11px !important;
+        padding: 9px 20px !important;
+        font-weight: 700 !important;
         font-size: 13px !important;
-        letter-spacing: 0.01em;
-        box-shadow: 0 4px 14px rgba(79, 70, 229, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.2) !important;
-        transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1) !important;
+        letter-spacing: 0.02em;
+        box-shadow: 0 4px 16px rgba(255, 42, 84, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.3) !important;
+        transition: all 0.2s ease !important;
     }
     div.stButton > button:hover, div.stLinkButton > a:hover, .stForm button:hover {
-        background: linear-gradient(135deg, #6366F1 0%, #4F46E5 100%) !important;
-        border-color: rgba(255, 255, 255, 0.3) !important;
-        box-shadow: 0 6px 20px rgba(99, 102, 241, 0.5) !important;
-        transform: translateY(-1px);
-        color: #FFFFFF !important;
+        background: linear-gradient(135deg, #FF456A 0%, #D6003E 100%) !important;
+        border-color: rgba(255, 255, 255, 0.4) !important;
+        box-shadow: 0 6px 24px rgba(255, 42, 84, 0.55) !important;
+        transform: translateY(-2px);
     }
 
-    /* Modern Expanders */
+    /* Modern Glassmorphic Expanders */
     div[data-testid="stExpander"] {
-        background: var(--bg-card) !important;
-        border: 1px solid var(--border-subtle) !important;
-        border-radius: 12px !important;
-        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2) !important;
-        margin-bottom: 12px !important;
+        background: var(--spidey-card) !important;
+        border: 1px solid var(--spidey-border) !important;
+        border-radius: 14px !important;
+        box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35) !important;
+        margin-bottom: 14px !important;
         transition: all 0.2s ease;
     }
     div[data-testid="stExpander"]:hover {
-        border-color: rgba(99, 102, 241, 0.3) !important;
+        border-color: rgba(255, 42, 84, 0.35) !important;
     }
 
-    /* Metric Cards */
+    /* Metrics Styling */
     div[data-testid="stMetricValue"] {
-        font-size: 1.6rem !important;
-        font-weight: 800 !important;
-        color: #F8FAFC !important;
+        font-size: 1.7rem !important;
+        font-weight: 900 !important;
+        background: linear-gradient(135deg, #FFFFFF 40%, #FF8099 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
     }
     div[data-testid="stMetricLabel"] {
-        font-size: 0.8rem !important;
-        font-weight: 600 !important;
+        font-size: 0.82rem !important;
+        font-weight: 700 !important;
         color: #94A3B8 !important;
         text-transform: uppercase;
         letter-spacing: 0.05em;
     }
 
-    /* Status Pills */
-    .status-badge {
+    /* Badges */
+    .spidey-pill {
         display: inline-flex;
         align-items: center;
-        padding: 3px 10px;
+        gap: 5px;
+        padding: 3px 12px;
         border-radius: 9999px;
         font-size: 11px;
-        font-weight: 700;
-        letter-spacing: 0.04em;
+        font-weight: 800;
+        letter-spacing: 0.03em;
     }
-    .status-open {
-        background: rgba(239, 68, 68, 0.15);
-        color: #F87171;
-        border: 1px solid rgba(239, 68, 68, 0.3);
+    .spidey-pill-open {
+        background: rgba(255, 42, 84, 0.15);
+        color: #FF5C7A;
+        border: 1px solid rgba(255, 42, 84, 0.4);
     }
-    .status-fixed {
-        background: rgba(16, 185, 129, 0.15);
-        color: #34D399;
-        border: 1px solid rgba(16, 185, 129, 0.3);
+    .spidey-pill-fixed {
+        background: rgba(0, 210, 255, 0.15);
+        color: #38BDF8;
+        border: 1px solid rgba(0, 210, 255, 0.4);
     }
 
-    /* News Feed Cards */
+    /* Daily Bugle Header & Articles */
+    .bugle-masthead {
+        background: linear-gradient(135deg, rgba(20, 10, 10, 0.9) 0%, rgba(10, 15, 30, 0.9) 100%);
+        border: 2px solid #FF2A54;
+        border-radius: 14px;
+        padding: 16px;
+        margin-bottom: 20px;
+        text-align: center;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5), inset 0 0 20px rgba(255, 42, 84, 0.1);
+    }
+    .bugle-title {
+        font-family: 'Cinzel', serif !important;
+        font-size: 2.2rem !important;
+        font-weight: 900 !important;
+        letter-spacing: 3px;
+        color: #F8FAFC !important;
+        margin: 0 !important;
+        text-shadow: 0 0 10px rgba(255, 42, 84, 0.5) !important;
+    }
+    .bugle-tagline {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 11px;
+        letter-spacing: 2px;
+        color: #00D2FF;
+        text-transform: uppercase;
+        margin-top: 4px;
+    }
     .news-card {
-        background: linear-gradient(135deg, rgba(20, 29, 48, 0.75) 0%, rgba(15, 23, 42, 0.85) 100%);
+        background: linear-gradient(135deg, rgba(18, 24, 44, 0.8) 0%, rgba(12, 16, 32, 0.9) 100%);
         border: 1px solid rgba(255, 255, 255, 0.08);
-        border-radius: 12px;
-        padding: 16px 20px;
-        margin-bottom: 12px;
+        border-radius: 14px;
+        padding: 18px 22px;
+        margin-bottom: 14px;
         transition: all 0.2s ease;
     }
     .news-card:hover {
-        border-color: rgba(99, 102, 241, 0.35);
-        box-shadow: 0 6px 24px rgba(0, 0, 0, 0.3);
+        border-color: rgba(0, 210, 255, 0.4);
+        box-shadow: 0 8px 28px rgba(0, 0, 0, 0.4), 0 0 16px rgba(0, 210, 255, 0.12);
+        transform: translateY(-1px);
     }
     .news-title {
         font-size: 1.05rem;
         font-weight: 700;
-        color: #F8FAFC;
+        color: #FFFFFF;
         margin-bottom: 6px;
     }
     .news-meta {
-        font-size: 0.8rem;
+        font-size: 0.82rem;
         color: #94A3B8;
     }
     </style>
@@ -538,7 +565,7 @@ def create_user(username, password):
         conn.commit()
         return True, None
     except sqlite3.IntegrityError:
-        return False, "That username is already taken."
+        return False, "That citizen handle is already taken."
     finally:
         conn.close()
 
@@ -635,20 +662,20 @@ def create_google_user(username, email):
         conn.commit()
         return True, None
     except sqlite3.IntegrityError:
-        return False, "That username is already taken - try another."
+        return False, "That handle is taken - try another."
     finally:
         conn.close()
 
 
 def civic_badge(score):
     if score >= 100:
-        return "⚡ Guardian Lead"
+        return "🕸️🦸 Amazing Spider-Citizen"
     elif score >= 50:
-        return "🛡️ Civic Champion"
+        return "🦸 Spectacular Web-Slinger"
     elif score >= 20:
-        return "🔍 Scout Contributor"
+        return "🕷️ Web-Slinger in Training"
     else:
-        return "🌱 Neighborhood Sentinel"
+        return "🏙️ Friendly Neighborhood Sentinel"
 
 
 # --------------------------------------------------------------------------
@@ -792,7 +819,7 @@ def fetch_news_rss(query, max_items=10):
     url = "https://news.google.com/rss/search?" + urllib.parse.urlencode(
         {"q": query, "hl": "en-IN", "gl": "IN", "ceid": "IN:en"}
     )
-    request = urllib.request.Request(url, headers={"User-Agent": "RoadPulse-Civic-Platform/2.0"})
+    request = urllib.request.Request(url, headers={"User-Agent": "RoadPulse-Spidey-Watch/3.0"})
     try:
         with urllib.request.urlopen(request, timeout=8) as response:
             xml_bytes = response.read()
@@ -810,7 +837,7 @@ def fetch_news_rss(query, max_items=10):
         link = item.findtext("link") or ""
         raw_pub_date = item.findtext("pubDate") or ""
         source_el = item.find("source")
-        source = source_el.text if source_el is not None else "Civic Wire"
+        source = source_el.text if source_el is not None else "Daily Bugle Wire"
 
         try:
             published_dt = parsedate_to_datetime(raw_pub_date)
@@ -982,14 +1009,13 @@ def analyze_road_photo(image_bytes, mime_type="image/jpeg"):
         return None, "Set the GROQ_API_KEY environment variable."
 
     prompt = (
-        "You are verifying a citizen-submitted photo for a civic road-damage reporting platform, "
-        "to filter out irrelevant or joke images. Look at this photo and respond with "
-        "ONLY a JSON object, in exactly this shape: "
+        "You are verifying a citizen-submitted photo for a civic road-damage platform. "
+        "Filter out memes, jokes, or non-road images. Respond with ONLY a JSON object: "
         '{"is_road_issue": true or false, '
         '"category": one of ["Pothole","Waterlogging","Traffic/Cracks"] or null, '
         '"severity": one of ["Mild","Severe","Critical"] or null, '
         '"looks_ai_generated": false, '
-        '"explanation": "concise one-sentence description"}.'
+        '"explanation": "one concise sentence reason"}.'
     )
 
     client = Groq(api_key=api_key)
@@ -1038,8 +1064,8 @@ def polish_complaint_with_ai(details_text, category, rating, location_name):
         return None, "Set the GROQ_API_KEY environment variable."
 
     prompt = (
-        "Rewrite this citizen road complaint description as a formal, persuasive, and clear grievance "
-        "for a municipal public portal. Retain GPS coordinates, location names, and core facts. "
+        "Rewrite this citizen road complaint description as a formal, persuasive grievance "
+        "for a municipal portal. Keep GPS coordinates, location names, and core facts. "
         f"Respond with ONLY the rewritten text under {GCC_DETAILS_MAX_CHARS} characters, no quotation marks.\n\n"
         f"Category: {category}\nRating: {rating}/5\nLocation: {location_name}\n"
         f"Original text: {details_text}"
@@ -1068,7 +1094,7 @@ def build_civic_complaint(row, municipality_info, is_known_portal):
         info = municipality_info["categories"].get(row["category"], municipality_info["categories"]["Pothole"])
         group, complaint_type = info["group"], info["type"]
     else:
-        group, complaint_type = "Roads & Public Works", row["category"]
+        group, complaint_type = "Roads & Infrastructure", row["category"]
 
     title = f"Road Defect Report - {row['location_name']}"[:80]
     description = safe_str(row["description"], "Citizen submitted report via RoadPulse.")
@@ -1082,7 +1108,7 @@ def geocode_location(query):
     url = "https://nominatim.openstreetmap.org/search?" + urllib.parse.urlencode(
         {"q": query, "format": "json", "limit": 1}
     )
-    request = urllib.request.Request(url, headers={"User-Agent": "RoadPulse-Civic-Platform/2.0"})
+    request = urllib.request.Request(url, headers={"User-Agent": "RoadPulse-Spidey-Watch/3.0"})
     try:
         with urllib.request.urlopen(request, timeout=6) as response:
             data = json.loads(response.read().decode("utf-8"))
@@ -1098,7 +1124,7 @@ def get_location_name(lat, lon):
     url = "https://nominatim.openstreetmap.org/reverse?" + urllib.parse.urlencode(
         {"lat": lat, "lon": lon, "format": "json", "zoom": 18, "addressdetails": 0}
     )
-    request = urllib.request.Request(url, headers={"User-Agent": "RoadPulse-Civic-Platform/2.0"})
+    request = urllib.request.Request(url, headers={"User-Agent": "RoadPulse-Spidey-Watch/3.0"})
     try:
         with urllib.request.urlopen(request, timeout=6) as response:
             data = json.loads(response.read().decode("utf-8"))
@@ -1129,7 +1155,7 @@ def reviews_to_payload(df):
 # SIDEBAR
 # --------------------------------------------------------------------------
 if st.session_state.current_user is None:
-    st.sidebar.subheader("🔐 Access Portal")
+    st.sidebar.subheader("🕷️ Web-Watch Sign In")
 
     if st.session_state.get("_oauth_error"):
         st.sidebar.error(st.session_state._oauth_error)
@@ -1138,8 +1164,8 @@ if st.session_state.current_user is None:
     if st.session_state.get("_pending_google_email"):
         pending_email = st.session_state._pending_google_email
         st.sidebar.success(f"Authenticated as {pending_email}")
-        chosen_username = st.sidebar.text_input("Choose a username", key="google_username_choice")
-        if st.sidebar.button("Complete Sign Up"):
+        chosen_username = st.sidebar.text_input("Pick a Spidey Handle", key="google_username_choice")
+        if st.sidebar.button("Join the Web"):
             if not chosen_username.strip():
                 st.sidebar.error("Please enter a username.")
             else:
@@ -1154,13 +1180,13 @@ if st.session_state.current_user is None:
         if GOOGLE_OAUTH_CLIENT_ID:
             st.sidebar.link_button("🔵 Sign in with Google", build_google_auth_url())
         else:
-            st.sidebar.caption("Google OAuth optional.")
+            st.sidebar.caption("Google sign-in optional.")
 
-        with st.sidebar.expander("Local Account Sign In / Register"):
-            login_tab, signup_tab = st.tabs(["Sign In", "Register"])
+        with st.sidebar.expander("Local Citizen Account"):
+            login_tab, signup_tab = st.tabs(["Sign In", "Sign Up"])
 
             with login_tab:
-                login_username = st.text_input("Username", key="login_username")
+                login_username = st.text_input("Handle", key="login_username")
                 login_password = st.text_input("Password", type="password", key="login_password")
                 if st.button("Sign In", key="login_btn"):
                     if verify_user(login_username.strip(), login_password):
@@ -1170,11 +1196,11 @@ if st.session_state.current_user is None:
                         st.error("Invalid credentials.")
 
             with signup_tab:
-                signup_username = st.text_input("Username", key="signup_username")
+                signup_username = st.text_input("Choose Handle", key="signup_username")
                 signup_password = st.text_input("Password", type="password", key="signup_password")
                 if st.button("Create Account", key="signup_btn"):
                     if not signup_username.strip() or not signup_password:
-                        st.error("All fields required.")
+                        st.error("Both fields required.")
                     else:
                         ok, err = create_user(signup_username.strip(), signup_password)
                         if ok:
@@ -1186,17 +1212,17 @@ else:
     score = get_civic_score(st.session_state.current_user)
     st.sidebar.markdown(
         f"""
-        <div class="user-profile-card">
+        <div class="spidey-profile-card">
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-                <b>{st.session_state.current_user}</b>
-                <span class="civic-score-pill">★ {score} pts</span>
+                <span style="font-weight:800; font-size:1.05rem;">🕷️ {st.session_state.current_user}</span>
+                <span class="spidey-points-pill">★ {score} pts</span>
             </div>
-            <div style="font-size:12px; color:#A5B4FC;">{civic_badge(score)}</div>
+            <div style="font-size:12px; font-weight:600; color:#FF8099;">{civic_badge(score)}</div>
         </div>
         """,
         unsafe_allow_html=True,
     )
-    if st.sidebar.button("Sign Out"):
+    if st.sidebar.button("Log Out"):
         st.session_state.current_user = None
         st.rerun()
 
@@ -1205,21 +1231,21 @@ st.sidebar.markdown("---")
 # --------------------------------------------------------------------------
 # SIDEBAR - LOCATION TOOLS
 # --------------------------------------------------------------------------
-st.sidebar.subheader("📍 Target Location")
+st.sidebar.subheader("📍 Web-Sling Coordinates")
 
 if st.session_state.segment_coords:
     points = st.session_state.segment_coords
     centroid_lat = sum(p[0] for p in points) / len(points)
     centroid_lon = sum(p[1] for p in points) / len(points)
-    st.sidebar.success(f"Segment Selected ({len(points)} pts)")
+    st.sidebar.success(f"🧵 Segment Locked ({len(points)} pts)")
     st.sidebar.caption(f"📍 {get_location_name(centroid_lat, centroid_lon)}")
 elif st.session_state.clicked_lat is not None:
-    st.sidebar.success("Pin Selected")
+    st.sidebar.success("🎯 Pin Locked")
     st.sidebar.caption(f"📍 {get_location_name(st.session_state.clicked_lat, st.session_state.clicked_lon)}")
 else:
-    st.sidebar.caption("Click on the map or use the locator tools below.")
+    st.sidebar.caption("Click map or use Spidey radar tools below.")
 
-with st.sidebar.expander("⚡ GPS & Search Tools"):
+with st.sidebar.expander("🕸️ Spidey Radar & Search"):
     geo_result = geo_component(key="geo_button", default=None)
     if geo_result and geo_result != st.session_state._last_geo_raw:
         st.session_state._last_geo_raw = geo_result
@@ -1228,21 +1254,21 @@ with st.sidebar.expander("⚡ GPS & Search Tools"):
         st.session_state.segment_coords = None
         st.session_state.map_center = [geo_result["latitude"], geo_result["longitude"]]
 
-    search_query = st.text_input("Find Address / Landmark", placeholder="e.g. Anna Nagar, Chennai")
-    if st.button("Search Area"):
+    search_query = st.text_input("Find Neighborhood / Street", placeholder="e.g. T Nagar, Chennai")
+    if st.button("🔎 Locate"):
         if search_query.strip():
             result = geocode_location(search_query.strip())
             if result:
                 st.session_state.clicked_lat, st.session_state.clicked_lon = result
                 st.session_state.segment_coords = None
                 st.session_state.map_center = list(result)
-                st.success(f"Located: {result[0]:.4f}, {result[1]:.4f}")
+                st.success(f"Found: {result[0]:.4f}, {result[1]:.4f}")
             else:
                 st.error("Location not found.")
         else:
             st.warning("Enter a location to search.")
 
-    if st.button("Reset Selection"):
+    if st.button("Reset Pin"):
         st.session_state.clicked_lat = None
         st.session_state.clicked_lon = None
         st.session_state.segment_coords = None
@@ -1253,32 +1279,32 @@ st.sidebar.markdown("---")
 # --------------------------------------------------------------------------
 # SIDEBAR - SUBMISSION FORM
 # --------------------------------------------------------------------------
-st.sidebar.subheader("📝 Report Defect")
+st.sidebar.subheader("📝 Report Hazard")
 
 if st.session_state.current_user is None:
-    st.sidebar.info("Sign in above to submit an infrastructure report.")
+    st.sidebar.info("Sign in above to sling reports onto the web.")
 else:
     st.sidebar.caption("📸 AI Vision Damage Verification")
     photo_method = st.sidebar.radio(
-        "Photo Input Mode", ["📷 Live Camera", "📁 File Upload"],
+        "Capture Mode", ["📷 Live Cam", "📁 Device File"],
         horizontal=True, label_visibility="collapsed", key="review_photo_method",
     )
     if photo_method.startswith("📷"):
-        uploaded_photo = st.sidebar.camera_input("Capture Road Photo", key="review_photo_camera")
+        uploaded_photo = st.sidebar.camera_input("Shoot Road Photo", key="review_photo_camera")
     else:
         uploaded_photo = st.sidebar.file_uploader(
             "Upload Road Photo", type=["jpg", "jpeg", "png"], key="review_photo_uploader"
         )
     if uploaded_photo is not None:
-        if st.sidebar.button("✨ Run Vision Inspection"):
+        if st.sidebar.button("🕷️ Scan Photo with AI"):
             photo_bytes = uploaded_photo.getvalue()
             mime_type = uploaded_photo.type or "image/jpeg"
-            with st.spinner("Analyzing image features..."):
+            with st.spinner("Spidey-sense scanning photo..."):
                 result, ai_error = analyze_road_photo(photo_bytes, mime_type)
             if ai_error:
                 st.sidebar.warning(ai_error)
             elif not result.get("is_road_issue"):
-                st.sidebar.warning(f"⚠️ Non-road image detected: {result.get('explanation')}")
+                st.sidebar.warning(f"⚠️ False Alarm: {result.get('explanation')}")
                 st.session_state.ai_category = None
                 st.session_state.ai_rating = None
                 st.session_state.ai_explanation = None
@@ -1290,7 +1316,7 @@ else:
             st.session_state.pending_photo_bytes = photo_bytes
 
         if st.session_state.get("ai_explanation"):
-            st.sidebar.caption(f"🤖 Verdict: {st.session_state.ai_explanation}")
+            st.sidebar.caption(f"🤖 AI Verdict: {st.session_state.ai_explanation}")
 
     default_category_index = (
         CATEGORIES.index(st.session_state.get("ai_category"))
@@ -1300,9 +1326,9 @@ else:
 
     with st.sidebar.form("review_form", clear_on_submit=True):
         category = st.selectbox("Category", CATEGORIES, index=default_category_index)
-        rating = st.slider("Condition (1 = Critical, 5 = Pristine)", 1, 5, default_rating)
-        description = st.text_area("Observations / Details", placeholder="Describe exact damage, surface hazards...")
-        submitted = st.form_submit_button("Submit Intelligence Report")
+        rating = st.slider("Hazard Level (1 = Dangerous, 5 = Smooth)", 1, 5, default_rating)
+        description = st.text_area("Hazard Details", placeholder="Describe the potholes, cracks, or waterlogging...")
+        submitted = st.form_submit_button("🕸️ Thwip! Submit Report")
 
         if submitted:
             has_point = st.session_state.clicked_lat is not None
@@ -1314,7 +1340,7 @@ else:
                 st.error("Please pin or draw a location on the map first.")
             elif in_cooldown:
                 wait_seconds = int(SUBMISSION_COOLDOWN_SECONDS - cooldown_elapsed)
-                st.error(f"Anti-spam active: please wait {wait_seconds}s before submitting.")
+                st.error(f"⏱️ Slow down web-slinger! Wait {wait_seconds}s before submitting.")
             else:
                 if has_segment:
                     points = st.session_state.segment_coords
@@ -1329,7 +1355,7 @@ else:
                 duplicate = find_nearby_duplicate(centroid_lat, centroid_lon, category)
 
                 if duplicate:
-                    st.warning(f"A report for '{category}' already exists nearby at '{duplicate['location_name']}'.")
+                    st.warning(f"A report for '{category}' already exists nearby at '{duplicate['location_name']}'. Please endorse that one instead!")
                 else:
                     derived_location_name = get_location_name(centroid_lat, centroid_lon)
                     pending_bytes = st.session_state.get("pending_photo_bytes")
@@ -1342,7 +1368,7 @@ else:
                         path_coords=path_json, photo_path=photo_path,
                     )
                     add_civic_points(st.session_state.current_user, 10)
-                    st.success("Report registered successfully (+10 pts).")
+                    st.success("🕸️ *Thwip!* Hazard added to the neighborhood web! (+10 Civic Score)")
 
                     for key in ("clicked_lat", "clicked_lon", "segment_coords", "_last_picker_raw", "_last_geo_raw"):
                         st.session_state[key] = defaults[key]
@@ -1357,11 +1383,11 @@ else:
 st.markdown(
     """
     <div class="hero-header">
-        <div class="hero-badge">⚡ Live Civic Intelligence</div>
-        <h1 class="hero-title">RoadPulse Platform</h1>
+        <div class="spidey-radar-badge">🕷️ SPIDEY-SENSE: ACTIVE & MONITORING</div>
+        <h1 class="hero-title">RoadPulse · Friendly Neighborhood Watch</h1>
         <p class="hero-subtitle">
-            Next-generation crowdsourced road infrastructure monitoring, AI damage verification,
-            and automated municipal grievance routing.
+            With great roads comes great responsibility. Spot hazards, verify with AI,
+            and sling grievances directly to your municipal corporation.
         </p>
     </div>
     """,
@@ -1369,9 +1395,9 @@ st.markdown(
 )
 
 if not GOOGLE_MAPS_API_KEY:
-    st.warning("Google Maps API key not detected. Provide GOOGLE_MAPS_API_KEY in environment variables.")
+    st.warning("Google Maps API key not detected. Set GOOGLE_MAPS_API_KEY in environment.")
 
-tab_map, tab_reviews, tab_news = st.tabs(["🗺️ Infrastructure Map", "💬 Community Feed", "📰 Civic Wire"])
+tab_map, tab_reviews, tab_news = st.tabs(["🗺️ Neighborhood Radar", "💬 Community Web", "📰 The Daily Bugle"])
 
 # ----- TAB 1: MAP -------
 with tab_map:
@@ -1380,9 +1406,9 @@ with tab_map:
     col_view, col_blank = st.columns([2, 4])
     with col_view:
         view_choice = st.segmented_control(
-            "Layer Selection",
-            ["📍 Interactive Explorer", "🔥 Municipal Priority Heatmap"],
-            default="📍 Interactive Explorer",
+            "Radar View",
+            ["📍 Live Explorer", "🔥 Hazard Heatmap"],
+            default="📍 Live Explorer",
             label_visibility="collapsed"
         )
     is_heatmap_view = "Heatmap" in str(view_choice)
@@ -1390,16 +1416,16 @@ with tab_map:
     col_map, col_stats = st.columns([3.2, 1])
 
     with col_stats:
-        st.metric("Total Monitored Incidents", len(reviews_df))
+        st.metric("Total Hazards Trapped", len(reviews_df))
         if not reviews_df.empty:
-            st.metric("Mean Quality Index", f"{reviews_df['rating'].mean():.1f} / 5.0")
+            st.metric("Mean Road Quality", f"{reviews_df['rating'].mean():.1f} ⭐")
             open_severe = ((reviews_df["rating"] <= 2) & (reviews_df["status"] == "Open")).sum()
-            st.metric("Critical Open Hazards (≤2★)", int(open_severe))
+            st.metric("Severe Open Hazards", int(open_severe))
 
         if is_heatmap_view:
-            st.caption("🔴 Red = High Severity Open &nbsp;|&nbsp; 🟢 Green = Resolved")
+            st.caption("🔴 Red = Critical Unfixed &nbsp;|&nbsp; 🟢 Green = Fixed")
         else:
-            st.caption("Use the ✏️ Draw tool on the map to mark entire road corridors.")
+            st.caption("Use the ✏️ Draw Segment tool on top-right of the map to trace road spans.")
 
     with col_map:
         if GOOGLE_MAPS_API_KEY:
@@ -1439,60 +1465,62 @@ with tab_map:
                         st.session_state.clicked_lat = None
                         st.session_state.clicked_lon = None
         else:
-            st.info("Map viewer awaiting Google Maps API credentials.")
+            st.info("Map awaiting Google Maps API key credentials.")
 
 # ----- TAB 2: COMMUNITY -------
 with tab_reviews:
-    st.subheader("Community Verification & Audit Log")
+    st.subheader("💬 Community Web Feed")
+    st.caption("All reported road defects, photo evidence, civic endorsements, and repair confirmations.")
+
     all_reviews = fetch_all_reviews()
 
     if all_reviews.empty:
-        st.info("No recorded reports. Select a location and submit an audit to get started.")
+        st.info("No hazards on the web yet. Pin a road in the sidebar to report one!")
     else:
         for _, row in all_reviews.iterrows():
             review_id = int(row["id"])
             is_segment = isinstance(row["path_coords"], str)
-            loc_icon = "🧵 Corridor" if is_segment else "📍 Pin"
-            status_html = '<span class="status-badge status-fixed">🟢 FIXED</span>' if row["status"] == "Fixed" else '<span class="status-badge status-open">🔴 OPEN</span>'
+            loc_icon = "🧵 Corridor" if is_segment else "📍 Spot"
+            status_html = '<span class="spidey-pill spidey-pill-fixed">🟢 FIXED</span>' if row["status"] == "Fixed" else '<span class="spidey-pill spidey-pill-open">🔴 OPEN</span>'
             stars = "⭐" * int(row["rating"])
             ticket_id = f"RP-{review_id:04d}"
 
             with st.expander(f"{ticket_id} · {loc_icon} {row['location_name']} · {stars}"):
                 st.markdown(
                     f"<div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;'>"
-                    f"<span><b>Category:</b> {row['category']} · <b>Auditor:</b> {row['username']}</span>"
+                    f"<span><b>Category:</b> {row['category']} · <b>Reported by:</b> 🕷️ {row['username']}</span>"
                     f"{status_html}"
                     f"</div>",
                     unsafe_allow_html=True
                 )
-                st.write(safe_str(row["description"], "_No detailed description logged._"))
+                st.write(safe_str(row["description"], "_No description provided._"))
 
                 if row["status"] == "Open" and int(row["rating"]) <= 2:
                     reported_dt = datetime.strptime(row["timestamp"], "%Y-%m-%d %H:%M:%S")
                     days_elapsed = (datetime.now() - reported_dt).days
                     if days_elapsed > SLA_DAYS:
-                        st.error(f"⚠️ SLA Breached: Logged {days_elapsed} days ago (Exceeds {SLA_DAYS}-day threshold)")
+                        st.error(f"⛔ SLA Breached! Reported {days_elapsed} days ago (Exceeds {SLA_DAYS}-day repair clock).")
                     else:
-                        st.info(f"⏳ Municipal SLA Clock: {SLA_DAYS - days_elapsed} day(s) remaining for resolution.")
+                        st.info(f"⏳ Repair SLA Clock: {SLA_DAYS - days_elapsed} day(s) remaining for municipal resolution.")
 
                 # Municipal Grievance Routing
                 if row["status"] == "Open":
-                    with st.expander("📋 Dispatch to Municipal Public Works"):
+                    with st.expander("📋 Sling this Grievance to Municipal Public Works"):
                         municipality_info, is_known_portal = get_municipality_info(row)
-                        st.markdown(f"**Jurisdiction:** `{municipality_info['name']}`")
+                        st.markdown(f"**Target Jurisdiction:** `{municipality_info['name']}`")
                         civic = build_civic_complaint(row, municipality_info, is_known_portal)
 
                         col_g1, col_g2 = st.columns(2)
                         with col_g1:
-                            st.caption("Grievance Category")
+                            st.caption("Complaint Category")
                             st.code(civic["group"], language=None)
                         with col_g2:
                             st.caption("Complaint Type")
                             st.code(civic["type"], language=None)
 
                         polish_key = f"ai_polished_{review_id}"
-                        if st.button("✨ Refine with AI", key=f"ai_polish_btn_{review_id}"):
-                            with st.spinner("Polishing wording..."):
+                        if st.button("✨ Polish Grievance with AI", key=f"ai_polish_btn_{review_id}"):
+                            with st.spinner("Crafting formal complaint wording..."):
                                 polished, ai_error = polish_complaint_with_ai(
                                     civic["details"], row["category"], int(row["rating"]), row["location_name"]
                                 )
@@ -1502,13 +1530,13 @@ with tab_reviews:
                                 st.session_state[polish_key] = polished
 
                         details_to_show = st.session_state.get(polish_key, civic["details"])
-                        st.caption(f"Official Grievance Description ({len(details_to_show)}/{GCC_DETAILS_MAX_CHARS} chars)")
+                        st.caption(f"Complaint Description ({len(details_to_show)}/{GCC_DETAILS_MAX_CHARS} chars):")
                         st.code(details_to_show, language=None)
 
                         if row["photo_path"] and isinstance(row["photo_path"], str):
                             safe_image(row["photo_path"], width=240, caption="Evidence Photo")
 
-                        btn_title = "Launch Portal ↗" if is_known_portal else "Find Regional Grievance Portal ↗"
+                        btn_title = "Open Official Portal ↗" if is_known_portal else "Search Regional Portal ↗"
                         st.link_button(btn_title, municipality_info["url"])
 
                 col_up, _ = st.columns([1, 5])
@@ -1525,16 +1553,16 @@ with tab_reviews:
 
                 if row["status"] == "Open":
                     st.markdown("---")
-                    st.markdown("##### 🛠️ Resolution Verification")
+                    st.markdown("##### 🛠️ Confirm Fixed (Upload After-Repair Proof)")
                     if isinstance(row["photo_path"], str):
-                        safe_image(row["photo_path"], caption="Initial Condition", width=220)
+                        safe_image(row["photo_path"], caption="Before Repair", width=220)
                     if st.session_state.current_user:
                         fixed_photo = st.file_uploader(
-                            "Upload Repair Verification Proof", type=["jpg", "jpeg", "png"],
+                            "Upload After-Repair Verification Photo", type=["jpg", "jpeg", "png"],
                             key=f"fixed_photo_upload_{review_id}",
                         )
-                        new_rating = st.slider("Repaired Condition Rating", 1, 5, 5, key=f"fixed_rating_{review_id}")
-                        if st.button("Mark Resolved & Validate", key=f"confirm_fixed_{review_id}"):
+                        new_rating = st.slider("New Road Quality Rating", 1, 5, 5, key=f"fixed_rating_{review_id}")
+                        if st.button("✅ Confirm Fixed & Earn +15 pts", key=f"confirm_fixed_{review_id}"):
                             fixed_path = save_photo(fixed_photo.getvalue(), f"fixed_{review_id}") if fixed_photo else None
                             mark_review_fixed(review_id, new_rating, fixed_path)
                             add_civic_points(st.session_state.current_user, 15)
@@ -1546,41 +1574,49 @@ with tab_reviews:
                             safe_image(row["photo_path"], caption="Before")
                     with col_a:
                         if isinstance(row["fixed_photo_path"], str):
-                            safe_image(row["fixed_photo_path"], caption="After Repair")
+                            safe_image(row["fixed_photo_path"], caption="After Repair (Fixed)")
 
                 st.markdown("---")
-                st.markdown("##### Comments & Status Updates")
+                st.markdown("##### 💬 Spider-Chat & Notes")
                 replies = fetch_replies(review_id)
                 if replies.empty:
-                    st.caption("No thread entries yet.")
+                    st.caption("No replies yet on this hazard.")
                 else:
                     for _, reply in replies.iterrows():
-                        st.markdown(f"**{reply['username']}**: {reply['reply_text']}")
+                        st.markdown(f"**🕷️ {reply['username']}**: {reply['reply_text']}")
                         st.caption(reply["timestamp"])
 
                 if st.session_state.current_user:
                     with st.form(f"reply_form_{review_id}", clear_on_submit=True):
-                        reply_text = st.text_input("Add field note or update", key=f"reply_input_{review_id}")
-                        if st.form_submit_button("Post Note"):
+                        reply_text = st.text_input("Add a comment / update", key=f"reply_input_{review_id}")
+                        if st.form_submit_button("Post Reply (+2 pts)"):
                             if reply_text.strip():
                                 insert_reply(review_id, st.session_state.current_user, reply_text.strip())
                                 add_civic_points(st.session_state.current_user, 2)
                                 st.rerun()
 
-# ----- TAB 3: THE DAILY BUGLE / CIVIC WIRE -------
+# ----- TAB 3: THE DAILY BUGLE -------
 with tab_news:
-    st.subheader("📰 Civic Wire & Infrastructure Reports")
-    st.caption("Live aggregate of verified media reports and road quality intelligence.")
+    st.markdown(
+        """
+        <div class="bugle-masthead">
+            <div class="bugle-tagline">SERVING THE NEIGHBORHOOD SINCE DAY ONE</div>
+            <h1 class="bugle-title">THE DAILY BUGLE</h1>
+            <div class="bugle-tagline">REAL NEWS. REAL ROADS. REAL CITIZENS.</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     news_query = st.text_input("Topic Search", value="Chennai road repair OR pothole", key="news_search_query")
-    if st.button("🔄 Refresh Wire Feed"):
+    if st.button("🔄 Fetch Latest Bugle Headlines"):
         fetched = fetch_news_rss(news_query.strip())
         if fetched:
             store_news_items(fetched, news_query.strip())
             st.session_state.news_page = 1
-            st.success(f"Synced {len(fetched)} articles.")
+            st.success(f"Fetched {len(fetched)} articles.")
         else:
-            st.warning("No updates found.")
+            st.warning("No articles found for this topic.")
         st.rerun()
 
     if "news_page" not in st.session_state:
@@ -1595,7 +1631,7 @@ with tab_news:
     all_news = fetch_news_for_query(news_query.strip())
 
     if all_news.empty:
-        st.info("No wire dispatches on record. Click 'Refresh Wire Feed' above to ingest news.")
+        st.info("No Bugle dispatches on record. Click 'Fetch Latest Bugle Headlines' above!")
     else:
         total_pages = max(1, (len(all_news) + PAGE_SIZE - 1) // PAGE_SIZE)
         st.session_state.news_page = min(st.session_state.news_page, total_pages)
@@ -1610,14 +1646,14 @@ with tab_news:
                 f"""
                 <div class="news-card">
                     <div class="news-title">{item["title"]}</div>
-                    <div class="news-meta">Source: {item["source"]} · {item["published"]}</div>
+                    <div class="news-meta">Source: <b>{item["source"]}</b> · {item["published"]}</div>
                 </div>
                 """,
                 unsafe_allow_html=True
             )
             col_link, col_vote = st.columns([4, 1])
             with col_link:
-                st.link_button("Read Source ↗", item["link"])
+                st.link_button("Read Article ↗", item["link"])
             with col_vote:
                 if st.session_state.current_user is None:
                     st.caption(f"👍 {item['upvote_count']}")
@@ -1635,7 +1671,7 @@ with tab_news:
                 st.session_state.news_page -= 1
                 st.rerun()
         with col_info:
-            st.markdown(f"<div style='text-align:center; padding-top:6px;'>Page {page} of {total_pages} ({len(all_news)} items)</div>", unsafe_allow_html=True)
+            st.markdown(f"<div style='text-align:center; padding-top:6px;'>Page {page} of {total_pages} ({len(all_news)} articles)</div>", unsafe_allow_html=True)
         with col_next:
             if st.button("Next ➡", disabled=(page >= total_pages)):
                 st.session_state.news_page += 1
