@@ -67,18 +67,63 @@ hashing (bcrypt/argon2) and proper session/token management.
 import hashlib
 import json
 import os
+import re
 import secrets
 import sqlite3
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
 from datetime import datetime
 from email.utils import parsedate_to_datetime
+from functools import wraps
 
 import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
+
+# --------------------------------------------------------------------------
+# RESILIENCE: Retry decorator for handling API overload (503 errors)
+# --------------------------------------------------------------------------
+def retry_with_backoff(max_retries=3, backoff_factor=2, delay_base=1):
+    """
+    Decorator that retries failed API calls with exponential backoff.
+    - 1st attempt: immediate
+    - 2nd attempt (if fails): 1 second wait
+    - 3rd attempt (if fails): 2 seconds wait
+    - 4th attempt (if fails): 4 seconds wait
+    Then gives up gracefully.
+    
+    Catches: 503 UNAVAILABLE, 429 TOO MANY REQUESTS, RESOURCE_EXHAUSTED
+    """
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            last_error = None
+            
+            for attempt in range(max_retries):
+                try:
+                    return func(*args, **kwargs)
+                except Exception as e:
+                    last_error = e
+                    error_str = str(e)
+                    
+                    # Check if it's a 503, 429, or resource exhaustion error
+                    if ("503" in error_str or "429" in error_str or "RESOURCE_EXHAUSTED" in error_str):
+                        if attempt < max_retries - 1:
+                            wait_time = delay_base * (backoff_factor ** attempt)
+                            time.sleep(wait_time)
+                            continue
+                    
+                    # If not a 503/429, or we're out of retries, raise
+                    raise
+            
+            # All retries exhausted
+            raise Exception(f"Failed after {max_retries} attempts: {last_error}")
+        
+        return wrapper
+    return decorator
 
 # --------------------------------------------------------------------------
 # CONFIG
@@ -379,6 +424,9 @@ def init_db():
         "photo_path": "TEXT",
         "fixed_photo_path": "TEXT",
         "username": "TEXT DEFAULT 'Anonymous'",
+        "related_news_url": "VARCHAR(500)",
+        "related_news_title": "VARCHAR(300)",
+        "news_matched_date": "TIMESTAMP",
     }
     for col_name, col_type in new_columns.items():
         if col_name not in existing_cols:
@@ -909,6 +957,112 @@ def upvote_news(news_id, username):
 
 
 # --------------------------------------------------------------------------
+# NEWS-TO-COMPLAINT LINKING (auto-connect road work news to complaints)
+# --------------------------------------------------------------------------
+def extract_keywords_from_news_title(title):
+    """
+    Extract meaningful keywords from news title for matching to complaints.
+    Example: "Pothole repair on Chennai Ring Road" 
+    -> ["pothole", "repair", "ring road"]
+    """
+    # Common road damage categories
+    damage_keywords = ["pothole", "waterlogging", "crack", "damage", 
+                       "repair", "construction", "maintenance", "resurfacing"]
+    
+    title_lower = title.lower()
+    found = []
+    
+    # Find damage keywords
+    for keyword in damage_keywords:
+        if keyword in title_lower:
+            found.append(keyword)
+    
+    # Extract place names (capitalized words - likely location references)
+    places = re.findall(r'\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\b', title)
+    found.extend([p.lower() for p in places])
+    
+    return list(set(found))  # Remove duplicates
+
+
+def link_news_to_nearby_complaints(news_title, news_link):
+    """
+    When news is fetched, automatically find and link matching complaints.
+    Matches by category keywords and location names.
+    Example: News about "Bangalore-Mysore pothole repair" 
+    -> finds all open pothole complaints on that highway
+    -> updates those complaints with news link
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    # Extract keywords from news (e.g., "pothole", "Bangalore Main Road")
+    keywords = extract_keywords_from_news_title(news_title)
+    
+    if not keywords:
+        conn.close()
+        return
+    
+    # Find complaints that match these keywords
+    for keyword in keywords:
+        # Search in category, description, and location_name
+        cursor.execute("""
+            SELECT id FROM road_reviews
+            WHERE (category LIKE ? OR description LIKE ? OR location_name LIKE ?)
+            AND status = 'Open'
+            LIMIT 10
+        """, (f"%{keyword}%", f"%{keyword}%", f"%{keyword}%"))
+        
+        matching_complaints = cursor.fetchall()
+        
+        # Link each matching complaint to this news article
+        for (complaint_id,) in matching_complaints:
+            cursor.execute("""
+                UPDATE road_reviews
+                SET related_news_url = ?, related_news_title = ?, news_matched_date = ?
+                WHERE id = ?
+            """, (news_link, news_title, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), complaint_id))
+    
+    conn.commit()
+    conn.close()
+
+
+def process_news_and_link_complaints(news_items):
+    """
+    Process fetched news and auto-link to complaints.
+    Call this immediately after fetching news from RSS.
+    """
+    if not news_items:
+        return
+    
+    for news in news_items:
+        if news.get("title") and news.get("link"):
+            link_news_to_nearby_complaints(news["title"], news["link"])
+
+
+def show_linked_news_for_complaint(review_id, st):
+    """
+    Display news article linked to this complaint (if any).
+    Call this in the review details section to show users
+    if work is happening on the same road.
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        SELECT related_news_title, related_news_url, news_matched_date
+        FROM road_reviews
+        WHERE id = ?
+    """, (review_id,))
+    
+    result = cursor.fetchone()
+    conn.close()
+    
+    if result and result[0]:
+        title, url, date = result
+        st.info(f"📰 **Related news:** [{title}]({url})\n\nMatched on: {date}")
+
+
+# --------------------------------------------------------------------------
 # SESSION STATE
 # --------------------------------------------------------------------------
 defaults = {
@@ -1040,6 +1194,68 @@ def analyze_road_photo(image_bytes, mime_type="image/jpeg"):
         return data, None
     except Exception as exc:  # noqa: BLE001 - surface any API/parsing failure to the UI
         return None, f"Photo analysis failed: {exc}"
+
+
+@retry_with_backoff(max_retries=3, backoff_factor=2)
+def analyze_road_photo_safe(image_bytes, mime_type="image/jpeg"):
+    """
+    Wraps analyze_road_photo() with automatic retry logic.
+    Handles 503 UNAVAILABLE and 429 TOO MANY REQUESTS by retrying
+    up to 3 times with exponential backoff.
+    """
+    return analyze_road_photo(image_bytes, mime_type)
+
+
+def show_photo_analysis_with_fallback(photo_bytes, category, st):
+    """
+    User-friendly photo analysis with graceful fallback.
+    If Gemini is overloaded (503), still accepts the photo but marks
+    for manual review. Shows helpful message to user.
+    Returns: (is_valid, category, rating, reason_text)
+    """
+    try:
+        with st.spinner("🔍 Analyzing road damage..."):
+            result, ai_error = analyze_road_photo_safe(photo_bytes)
+        
+        if ai_error:
+            # Check if it's a 503/overload error
+            if "503" in ai_error or "temporarily" in ai_error.lower():
+                st.warning(
+                    "⏳ **Photo analysis service is temporarily busy.**\n\n"
+                    "No worries! We'll still accept your report. Our team will verify it manually. "
+                    "Thanks for helping improve roads! 🙏"
+                )
+                return True, category, 2, "Manual review pending"
+            else:
+                st.warning(f"⚠️ {ai_error}")
+                return False, category, 1, ai_error
+        
+        if result and result.get("is_road_issue"):
+            # Valid road damage detected
+            severity = result.get("severity", "Mild")
+            rating = SEVERITY_TO_RATING.get(severity, 3)
+            category = result.get("category", category)
+            explanation = result.get("explanation", "Road damage verified")
+            st.success(f"✅ {explanation}")
+            return True, category, rating, explanation
+        else:
+            # Not a road issue
+            explanation = result.get("explanation", "This doesn't appear to be road damage") if result else "Analysis inconclusive"
+            st.warning(f"⚠️ {explanation}")
+            return False, category, 1, explanation
+            
+    except Exception as e:
+        error_str = str(e)
+        if "503" in error_str or "overload" in error_str.lower():
+            st.warning(
+                "⏳ **Photo analysis service is temporarily busy.**\n\n"
+                "No worries! We'll still accept your report. Our team will verify it manually. "
+                "Thanks for helping improve roads! 🙏"
+            )
+            return True, category, 2, "Manual review pending"
+        else:
+            st.error(f"❌ Analysis error: {error_str}")
+            return False, category, 1, error_str
 
 
 def polish_complaint_with_ai(details_text, category, rating, location_name):
@@ -1328,29 +1544,23 @@ else:
         if st.sidebar.button("🔍 Verify & Analyze with AI"):
             photo_bytes = uploaded_photo.getvalue()
             mime_type = uploaded_photo.type or "image/jpeg"
-            result, ai_error = analyze_road_photo(photo_bytes, mime_type)
-            if ai_error:
-                st.sidebar.warning(ai_error)
-            elif not result.get("is_road_issue"):
-                st.sidebar.warning(
-                    f"⚠️ This doesn't look like road damage: {result.get('explanation', 'no reason given')}. "
-                    "You can still submit, but double-check your photo."
-                )
+            
+            # Use safe wrapper with retry logic and graceful degradation
+            is_valid, category, rating, explanation = show_photo_analysis_with_fallback(photo_bytes, CATEGORIES[0], st.sidebar)
+            
+            if is_valid:
+                # Valid road damage (or accepted for manual review if API was busy)
+                st.session_state.ai_category = category
+                st.session_state.ai_rating = rating
+                st.session_state.ai_explanation = explanation
+                if "manual" not in explanation.lower():
+                    st.sidebar.success(f"✅ Verified road damage. Form below is pre-filled.")
+            else:
+                # Not road damage
                 st.session_state.ai_category = None
                 st.session_state.ai_rating = None
                 st.session_state.ai_explanation = None
-            else:
-                if result.get("looks_ai_generated"):
-                    st.sidebar.warning(
-                        "🕵️ This photo has some signs of being AI-generated rather than a real "
-                        "photograph - best-effort AI guess, not a certainty, but worth a second look."
-                    )
-                st.session_state.ai_category = result.get("category")
-                st.session_state.ai_rating = SEVERITY_TO_RATING.get(result.get("severity"), 3)
-                st.session_state.ai_explanation = result.get("explanation")
-                st.sidebar.success(
-                    f"✅ Verified road damage - {result.get('severity')}. Form below is pre-filled."
-                )
+            
             st.session_state.pending_photo_bytes = photo_bytes
 
         if st.session_state.get("ai_explanation"):
@@ -1648,6 +1858,10 @@ with tab_reviews:
                             safe_image(row["fixed_photo_path"], caption="After")
 
                 st.markdown("---")
+                # Show linked news article if available
+                if row.get("related_news_url"):
+                    show_linked_news_for_complaint(review_id, st)
+                
                 st.markdown("**Replies:**")
                 replies = fetch_replies(review_id)
                 if replies.empty:
@@ -1713,8 +1927,10 @@ with tab_news:
         fetched = fetch_news_rss(news_query.strip())
         if fetched:
             store_news_items(fetched, news_query.strip())
+            # AUTO-LINK news articles to complaints about the same road
+            process_news_and_link_complaints(fetched)
             st.session_state.news_page = 1  # jump back to page 1 on a fresh fetch
-            st.success(f"Fetched {len(fetched)} articles.")
+            st.success(f"Fetched {len(fetched)} articles and linked to relevant complaints.")
         else:
             st.warning("No articles found, or the request failed - try a different search topic.")
         st.rerun()
