@@ -1079,7 +1079,7 @@ def polish_complaint_with_ai(details_text, category, rating, location_name):
     try:
         client = Groq(api_key=api_key)
         response = client.chat.completions.create(
-            model="llama3-8b-8192",
+            model="qwen/qwen3.6-27b",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.3
         )
