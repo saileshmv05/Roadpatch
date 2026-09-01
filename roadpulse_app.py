@@ -47,12 +47,12 @@ Features in this version:
     - Municipal Repair Priority Heatmap (Google Maps visualization library).
     - SLA countdown timer: a public 30-day repair clock on severe, open issues.
     - Municipal complaint auto-fill: known real portal for Chennai, reverse-
-      geocoded generic fallback everywhere else. Optional AI (OpenAI) button
-      to polish the complaint wording - needs OPENAI_API_KEY, degrades gracefully.
+      geocoded generic fallback everywhere else. Optional AI (Groq) button
+      to polish the complaint wording - needs GROQ_API_KEY, degrades gracefully.
     - Computer Vision damage verification: an uploaded photo is checked by
-      OpenAI vision to confirm it's actually road damage (filters out
+      Groq vision to confirm it's actually road damage (filters out
       irrelevant/joke images) and classify severity, auto-filling the
-      category/rating. Reuses OPENAI_API_KEY - no separate key needed.
+      category/rating. Reuses GROQ_API_KEY - no separate key needed.
     - Community News Feed: real Google News RSS headlines about road issues,
       upvotable by the community (NOT Facebook scraping - see comment on
       fetch_news_rss for why that's off the table).
@@ -192,7 +192,6 @@ def get_municipality_info(row):
         },
         False,
     )
-
 GOOGLE_MAPS_API_KEY = os.environ.get("GOOGLE_MAPS_API_KEY", "")
 GOOGLE_OAUTH_CLIENT_ID = os.environ.get("GOOGLE_OAUTH_CLIENT_ID", "")
 GOOGLE_OAUTH_CLIENT_SECRET = os.environ.get("GOOGLE_OAUTH_CLIENT_SECRET", "")
@@ -996,21 +995,17 @@ SEVERITY_TO_RATING = {"Mild": 3, "Severe": 2, "Critical": 1}
 
 def analyze_road_photo(image_bytes, mime_type="image/jpeg"):
     """
-    Sends an uploaded photo to GPT-4o / GPT-4o-mini to verify road damage
-    and classify severity using OpenAI's Vision capabilities.
+    Sends an uploaded photo to Groq to (a) verify it actually shows road
+    damage and (b) classify severity and category if it does. 
     """
     try:
-        from openai import OpenAI
+        from groq import Groq
     except ImportError:
-        return None, "Install the 'openai' package to enable photo verification (pip install openai)."
+        return None, "Install the 'groq' package to enable photo verification (pip install groq)."
 
-    api_key = os.environ.get("OPENAI_API_KEY")
+    api_key = os.environ.get("GROQ_API_KEY")
     if not api_key:
-        return None, "Set the OPENAI_API_KEY environment variable to enable photo verification."
-
-    # Convert raw bytes to base64 data URI
-    base64_image = base64.b64encode(image_bytes).decode("utf-8")
-    image_url = f"data:{mime_type};base64,{base64_image}"
+        return None, "Set the GROQ_API_KEY environment variable to enable photo verification."
 
     prompt = (
         "You are verifying a citizen-submitted photo for a civic road-damage reporting platform, "
@@ -1026,44 +1021,50 @@ def analyze_road_photo(image_bytes, mime_type="image/jpeg"):
     )
 
     try:
-        client = OpenAI(api_key=api_key)
+        client = Groq(api_key=api_key)
+        # Groq requires images to be passed as base64 data URIs
+        base64_image = base64.b64encode(image_bytes).decode('utf-8')
+        image_url = f"data:{mime_type};base64,{base64_image}"
+
         response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            response_format={"type": "json_object"},
+            model="llama-3.2-11b-vision-preview",
             messages=[
                 {
                     "role": "user",
                     "content": [
                         {"type": "text", "text": prompt},
-                        {
-                            "type": "image_url",
-                            "image_url": {"url": image_url, "detail": "low"},
-                        },
-                    ],
+                        {"type": "image_url", "image_url": {"url": image_url}}
+                    ]
                 }
             ],
-            temperature=0.2,
+            temperature=0.0
         )
+        
         raw_text = response.choices[0].message.content.strip()
-        data = json.loads(raw_text)
+        if raw_text.startswith("```"):
+            raw_text = raw_text.strip("`")
+            if raw_text.lower().startswith("json"):
+                raw_text = raw_text[4:]
+        data = json.loads(raw_text.strip())
         return data, None
-    except Exception as exc:
+    except Exception as exc: 
         return None, f"Photo analysis failed: {exc}"
 
 
 def polish_complaint_with_ai(details_text, category, rating, location_name):
     """
-    Sends the plain complaint text to GPT to generate a formal rewrite
-    suitable for official public grievance submissions.
+    Sends the plain complaint text to Groq and asks for a more
+    formal, persuasive rewrite suitable for an official government
+    complaint form.
     """
     try:
-        from openai import OpenAI
+        from groq import Groq
     except ImportError:
-        return None, "Install the 'openai' package to enable AI-polished complaint wording (pip install openai)."
+        return None, "Install the 'groq' package to enable AI-polished complaint wording (pip install groq)."
 
-    api_key = os.environ.get("OPENAI_API_KEY")
+    api_key = os.environ.get("GROQ_API_KEY")
     if not api_key:
-        return None, "Set the OPENAI_API_KEY environment variable to enable AI-polished complaint wording."
+        return None, "Set the GROQ_API_KEY environment variable to enable AI-polished complaint wording."
 
     prompt = (
         "Rewrite this citizen road-complaint description as a formal, persuasive, but factual "
@@ -1076,12 +1077,11 @@ def polish_complaint_with_ai(details_text, category, rating, location_name):
     )
 
     try:
-        client = OpenAI(api_key=api_key)
+        client = Groq(api_key=api_key)
         response = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="llama3-8b-8192",
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.3,
-            max_tokens=150,
+            temperature=0.3
         )
         polished = response.choices[0].message.content.strip().strip('"')
         return polished[:GCC_DETAILS_MAX_CHARS], None
@@ -1115,7 +1115,7 @@ def build_civic_complaint(row, municipality_info, is_known_portal):
 
 def geocode_location(query):
     """Free, no-API-key location search via OpenStreetMap's Nominatim."""
-    url = "https://nominatim.openstreetmap.org/search?" + urllib.parse.urlencode(
+    url = "[https://nominatim.openstreetmap.org/search](https://nominatim.openstreetmap.org/search)?" + urllib.parse.urlencode(
         {"q": query, "format": "json", "limit": 1}
     )
     request = urllib.request.Request(url, headers={"User-Agent": "RoadPulse-Hackathon-Prototype/1.0"})
@@ -1140,7 +1140,7 @@ def get_location_name(lat, lon):
     Cached for an hour (same pattern as the other geocoding calls) since
     Nominatim asks callers not to hammer it with repeat requests.
     """
-    url = "https://nominatim.openstreetmap.org/reverse?" + urllib.parse.urlencode(
+    url = "[https://nominatim.openstreetmap.org/reverse](https://nominatim.openstreetmap.org/reverse)?" + urllib.parse.urlencode(
         {"lat": lat, "lon": lon, "format": "json", "zoom": 18, "addressdetails": 0}
     )
     request = urllib.request.Request(url, headers={"User-Agent": "RoadPulse-Hackathon-Prototype/1.0"})
@@ -1318,7 +1318,7 @@ else:
     # the stronger anti-AI-image safeguard (no file picker to upload a
     # pre-existing/synthetic image from), but not everyone can safely stop
     # and shoot a photo mid-drive, so upload-from-device stays available
-    # too. The OpenAI "looks_ai_generated" check below is the safety net
+    # too. The Groq "looks_ai_generated" check below is the safety net
     # for the upload path - a soft signal, not a guarantee either way.
     st.sidebar.caption("📸 Optional: add a photo, then verify it with AI")
     photo_method = st.sidebar.radio(
@@ -1683,7 +1683,7 @@ with tab_news:
     st.markdown(
         """
         <style>
-        @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700;900&display=swap');
+        @import url('[https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700;900&display=swap](https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700;900&display=swap)');
         .bugle-masthead {
             border-top: 4px solid #f5f3ee; border-bottom: 4px solid #f5f3ee;
             padding: 10px 0; margin-bottom: 14px; text-align: center;
