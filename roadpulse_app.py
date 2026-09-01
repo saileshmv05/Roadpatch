@@ -1326,6 +1326,110 @@ def reviews_to_payload(df):
 # --------------------------------------------------------------------------
 # SIDEBAR - INSTAGRAM-STYLE LEFT NAVIGATION
 # --------------------------------------------------------------------------
+
+# If user not logged in, show auth page instead of main app
+if st.session_state.current_user is None:
+    st.markdown(
+        """
+        <style>
+        section[data-testid="stSidebar"] { display: none; }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    
+    # Auth page header
+    st.markdown(
+        """
+        <div style='text-align: center; margin: 60px 0 40px 0;'>
+            <div style='font-size: 3.5rem; margin-bottom: 20px;'>🕷️</div>
+            <h1 style='font-size: 2.5rem; margin: 0 0 10px 0; color: #FFFFFF;'>RoadPulse</h1>
+            <p style='font-size: 1rem; color: #CBD5E1; margin: 0;'>Friendly Neighborhood Road Watch</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    
+    # Auth choice tabs
+    auth_choice = st.segmented_control(
+        "Choose",
+        ["Sign In", "Sign Up"],
+        selection_mode="single",
+        default="Sign In"
+    )
+    
+    st.markdown("<br>", unsafe_allow_html=True)
+    
+    if auth_choice == "Sign In":
+        st.markdown("<h3 style='text-align: center;'>Sign In to Web-Watch</h3>", unsafe_allow_html=True)
+        
+        col1, col2, col3 = st.columns([1, 2, 1])
+        with col2:
+            if st.session_state.get("_oauth_error"):
+                st.error(st.session_state._oauth_error)
+                st.session_state._oauth_error = None
+            
+            login_username = st.text_input("Handle", key="page_login_username", placeholder="your spidey handle")
+            login_password = st.text_input("Password", type="password", key="page_login_password", placeholder="••••••")
+            
+            col_a, col_b = st.columns(2)
+            with col_a:
+                if st.button("Sign In", key="page_login_btn", use_container_width=True):
+                    if login_username.strip() and login_password:
+                        if verify_user(login_username.strip(), login_password):
+                            st.session_state.current_user = login_username.strip()
+                            st.rerun()
+                        else:
+                            st.error("❌ Invalid credentials.")
+                    else:
+                        st.error("❌ Enter username and password.")
+            
+            with col_b:
+                if GOOGLE_OAUTH_CLIENT_ID:
+                    st.link_button("Google", build_google_auth_url(), use_container_width=True)
+            
+            if st.session_state.get("_pending_google_email"):
+                st.success(f"✅ Authenticated as {st.session_state._pending_google_email}")
+                chosen_username = st.text_input("Pick a Spidey Handle", key="page_google_username_choice")
+                if st.button("Join the Web", key="page_google_join_btn", use_container_width=True):
+                    if not chosen_username.strip():
+                        st.error("Please enter a username.")
+                    else:
+                        ok, err = create_google_user(chosen_username.strip(), st.session_state._pending_google_email)
+                        if ok:
+                            st.session_state.current_user = chosen_username.strip()
+                            st.session_state._pending_google_email = None
+                            st.rerun()
+                        else:
+                            st.error(err)
+    
+    else:  # Sign Up
+        st.markdown("<h3 style='text-align: center;'>Join the Web</h3>", unsafe_allow_html=True)
+        
+        col1, col2, col3 = st.columns([1, 2, 1])
+        with col2:
+            signup_username = st.text_input("Choose Handle", key="page_signup_username", placeholder="your spidey alias")
+            signup_password = st.text_input("Password", type="password", key="page_signup_password", placeholder="••••••")
+            
+            col_a, col_b = st.columns(2)
+            with col_a:
+                if st.button("Create Account", key="page_signup_btn", use_container_width=True):
+                    if not signup_username.strip() or not signup_password:
+                        st.error("❌ Both fields required.")
+                    else:
+                        ok, err = create_user(signup_username.strip(), signup_password)
+                        if ok:
+                            st.session_state.current_user = signup_username.strip()
+                            st.rerun()
+                        else:
+                            st.error(f"❌ {err}")
+            
+            with col_b:
+                if GOOGLE_OAUTH_CLIENT_ID:
+                    st.link_button("Google", build_google_auth_url(), use_container_width=True)
+    
+    st.stop()
+
 st.sidebar.markdown('<div class="ig-logo">🕷️ RoadPulse</div>', unsafe_allow_html=True)
 
 NAV_ITEMS = ["🏠  Dashboard", "🧭  Map", "👥  Community", "📰  News Feed", "👤  Profile"]
@@ -1340,67 +1444,6 @@ st.session_state.nav_page = _nav_choice
 nav_page = _nav_choice.split("  ", 1)[1].strip()
 
 st.sidebar.markdown("---")
-
-# --------------------------------------------------------------------------
-# SIDEBAR - ACCOUNT
-# --------------------------------------------------------------------------
-if st.session_state.current_user is None:
-    st.sidebar.subheader("🕷️ Web-Watch Sign In")
-
-    if st.session_state.get("_oauth_error"):
-        st.sidebar.error(st.session_state._oauth_error)
-        st.session_state._oauth_error = None
-
-    if st.session_state.get("_pending_google_email"):
-        pending_email = st.session_state._pending_google_email
-        st.sidebar.success(f"Authenticated as {pending_email}")
-        chosen_username = st.sidebar.text_input("Pick a Spidey Handle", key="google_username_choice")
-        if st.sidebar.button("Join the Web"):
-            if not chosen_username.strip():
-                st.sidebar.error("Please enter a username.")
-            else:
-                ok, err = create_google_user(chosen_username.strip(), pending_email)
-                if ok:
-                    st.session_state.current_user = chosen_username.strip()
-                    st.session_state._pending_google_email = None
-                    st.rerun()
-                else:
-                    st.sidebar.error(err)
-    else:
-        if GOOGLE_OAUTH_CLIENT_ID:
-            st.sidebar.link_button("🔵 Sign in with Google", build_google_auth_url())
-        else:
-            st.sidebar.caption("Google sign-in optional.")
-
-        with st.sidebar.expander("Local Citizen Account"):
-            login_tab, signup_tab = st.tabs(["Sign In", "Sign Up"])
-
-            with login_tab:
-                login_username = st.text_input("Handle", key="login_username")
-                login_password = st.text_input("Password", type="password", key="login_password")
-                if st.button("Sign In", key="login_btn"):
-                    if verify_user(login_username.strip(), login_password):
-                        st.session_state.current_user = login_username.strip()
-                        st.rerun()
-                    else:
-                        st.error("Invalid credentials.")
-
-            with signup_tab:
-                signup_username = st.text_input("Choose Handle", key="signup_username")
-                signup_password = st.text_input("Password", type="password", key="signup_password")
-                if st.button("Create Account", key="signup_btn"):
-                    if not signup_username.strip() or not signup_password:
-                        st.error("Both fields required.")
-                    else:
-                        ok, err = create_user(signup_username.strip(), signup_password)
-                        if ok:
-                            st.session_state.current_user = signup_username.strip()
-                            st.rerun()
-                        else:
-                            st.error(err)
-else:
-    # User logged in - sidebar clean, all profile in Profile page
-    pass
 
 # --------------------------------------------------------------------------
 # MAIN UI
