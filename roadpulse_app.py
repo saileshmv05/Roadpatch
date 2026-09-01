@@ -1333,101 +1333,153 @@ if st.session_state.current_user is None:
         """
         <style>
         section[data-testid="stSidebar"] { display: none; }
+        
+        /* Auth page styling */
+        .auth-container {
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            background: 
+                radial-gradient(ellipse 60% 40% at 50% -10%, rgba(255, 42, 84, 0.2) 0%, transparent 60%),
+                radial-gradient(circle at 10% 30%, rgba(0, 210, 255, 0.1) 0%, transparent 45%),
+                linear-gradient(135deg, #070A12 0%, #0a1420 100%);
+            padding: 20px;
+        }
+        
+        .auth-box {
+            background: linear-gradient(135deg, rgba(28, 14, 28, 0.5) 0%, rgba(11, 18, 38, 0.5) 100%);
+            border: 1px solid rgba(255, 42, 84, 0.3);
+            border-radius: 20px;
+            padding: 50px 40px;
+            backdrop-filter: blur(20px);
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5), 0 0 40px rgba(255, 42, 84, 0.15);
+            width: 100%;
+            max-width: 420px;
+            text-align: center;
+        }
+        
+        .auth-logo {
+            font-size: 3rem;
+            margin-bottom: 12px;
+        }
+        
+        .auth-title {
+            font-size: 2rem;
+            font-weight: 900;
+            background: linear-gradient(135deg, #FFFFFF 20%, #FF2A54 50%, #00D2FF 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin: 0 0 8px 0;
+            color: #FFFFFF;
+        }
+        
+        .auth-subtitle {
+            font-size: 0.95rem;
+            color: #CBD5E1;
+            margin: 0 0 32px 0;
+            line-height: 1.5;
+        }
+        
+        .auth-tabs {
+            display: flex;
+            gap: 12px;
+            justify-content: center;
+            margin-bottom: 32px;
+        }
+        
+        .auth-tabs button {
+            font-size: 0.9rem !important;
+        }
         </style>
         """,
         unsafe_allow_html=True,
     )
     
-    # Auth page header
-    st.markdown(
-        """
-        <div style='text-align: center; margin: 60px 0 40px 0;'>
-            <div style='font-size: 3.5rem; margin-bottom: 20px;'>🕷️</div>
-            <h1 style='font-size: 2.5rem; margin: 0 0 10px 0; color: #FFFFFF;'>RoadPulse</h1>
-            <p style='font-size: 1rem; color: #CBD5E1; margin: 0;'>Friendly Neighborhood Road Watch</p>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    # Main auth container
+    st.markdown('<div class="auth-container">', unsafe_allow_html=True)
+    st.markdown('<div class="auth-box">', unsafe_allow_html=True)
     
-    # Auth choice tabs
-    auth_choice = st.segmented_control(
-        "Choose",
-        ["Sign In", "Sign Up"],
-        selection_mode="single",
-        default="Sign In"
-    )
+    # Header
+    st.markdown('<div class="auth-logo">🕷️</div>', unsafe_allow_html=True)
+    st.markdown('<h1 class="auth-title">RoadPulse</h1>', unsafe_allow_html=True)
+    st.markdown('<p class="auth-subtitle">Friendly Neighborhood Road Watch</p>', unsafe_allow_html=True)
+    
+    # Auth choice - centered
+    col1, col2, col3 = st.columns([1, 2.5, 1])
+    with col2:
+        auth_choice = st.segmented_control(
+            "Choose",
+            ["Sign In", "Sign Up"],
+            selection_mode="single",
+            default="Sign In"
+        )
     
     st.markdown("<br>", unsafe_allow_html=True)
     
     if auth_choice == "Sign In":
-        st.markdown("<h3 style='text-align: center;'>Sign In to Web-Watch</h3>", unsafe_allow_html=True)
+        if st.session_state.get("_oauth_error"):
+            st.error(st.session_state._oauth_error)
+            st.session_state._oauth_error = None
         
-        col1, col2, col3 = st.columns([1, 2, 1])
-        with col2:
-            if st.session_state.get("_oauth_error"):
-                st.error(st.session_state._oauth_error)
-                st.session_state._oauth_error = None
-            
-            login_username = st.text_input("Handle", key="page_login_username", placeholder="your spidey handle")
-            login_password = st.text_input("Password", type="password", key="page_login_password", placeholder="••••••")
-            
-            col_a, col_b = st.columns(2)
-            with col_a:
-                if st.button("Sign In", key="page_login_btn", use_container_width=True):
-                    if login_username.strip() and login_password:
-                        if verify_user(login_username.strip(), login_password):
-                            st.session_state.current_user = login_username.strip()
-                            st.rerun()
-                        else:
-                            st.error("❌ Invalid credentials.")
+        login_username = st.text_input("Handle", key="page_login_username", placeholder="your spidey handle")
+        login_password = st.text_input("Password", type="password", key="page_login_password", placeholder="••••••")
+        
+        col_a, col_b = st.columns(2, gap="small")
+        with col_a:
+            if st.button("Sign In", key="page_login_btn", use_container_width=True):
+                if login_username.strip() and login_password:
+                    if verify_user(login_username.strip(), login_password):
+                        st.session_state.current_user = login_username.strip()
+                        st.rerun()
                     else:
-                        st.error("❌ Enter username and password.")
-            
-            with col_b:
-                if GOOGLE_OAUTH_CLIENT_ID:
-                    st.link_button("Google", build_google_auth_url(), use_container_width=True)
-            
-            if st.session_state.get("_pending_google_email"):
-                st.success(f"✅ Authenticated as {st.session_state._pending_google_email}")
-                chosen_username = st.text_input("Pick a Spidey Handle", key="page_google_username_choice")
-                if st.button("Join the Web", key="page_google_join_btn", use_container_width=True):
-                    if not chosen_username.strip():
-                        st.error("Please enter a username.")
+                        st.error("❌ Invalid credentials.")
+                else:
+                    st.error("❌ Enter username and password.")
+        
+        with col_b:
+            if GOOGLE_OAUTH_CLIENT_ID:
+                st.link_button("🔵 Google", build_google_auth_url(), use_container_width=True)
+        
+        if st.session_state.get("_pending_google_email"):
+            st.success(f"✅ Authenticated as {st.session_state._pending_google_email}")
+            chosen_username = st.text_input("Pick a Spidey Handle", key="page_google_username_choice")
+            if st.button("Join the Web", key="page_google_join_btn", use_container_width=True):
+                if not chosen_username.strip():
+                    st.error("Please enter a username.")
+                else:
+                    ok, err = create_google_user(chosen_username.strip(), st.session_state._pending_google_email)
+                    if ok:
+                        st.session_state.current_user = chosen_username.strip()
+                        st.session_state._pending_google_email = None
+                        st.rerun()
                     else:
-                        ok, err = create_google_user(chosen_username.strip(), st.session_state._pending_google_email)
-                        if ok:
-                            st.session_state.current_user = chosen_username.strip()
-                            st.session_state._pending_google_email = None
-                            st.rerun()
-                        else:
-                            st.error(err)
+                        st.error(err)
     
     else:  # Sign Up
-        st.markdown("<h3 style='text-align: center;'>Join the Web</h3>", unsafe_allow_html=True)
+        signup_username = st.text_input("Choose Handle", key="page_signup_username", placeholder="your spidey alias")
+        signup_password = st.text_input("Password", type="password", key="page_signup_password", placeholder="••••••")
         
-        col1, col2, col3 = st.columns([1, 2, 1])
-        with col2:
-            signup_username = st.text_input("Choose Handle", key="page_signup_username", placeholder="your spidey alias")
-            signup_password = st.text_input("Password", type="password", key="page_signup_password", placeholder="••••••")
-            
-            col_a, col_b = st.columns(2)
-            with col_a:
-                if st.button("Create Account", key="page_signup_btn", use_container_width=True):
-                    if not signup_username.strip() or not signup_password:
-                        st.error("❌ Both fields required.")
+        col_a, col_b = st.columns(2, gap="small")
+        with col_a:
+            if st.button("Create Account", key="page_signup_btn", use_container_width=True):
+                if not signup_username.strip() or not signup_password:
+                    st.error("❌ Both fields required.")
+                else:
+                    ok, err = create_user(signup_username.strip(), signup_password)
+                    if ok:
+                        st.session_state.current_user = signup_username.strip()
+                        st.rerun()
                     else:
-                        ok, err = create_user(signup_username.strip(), signup_password)
-                        if ok:
-                            st.session_state.current_user = signup_username.strip()
-                            st.rerun()
-                        else:
-                            st.error(f"❌ {err}")
-            
-            with col_b:
-                if GOOGLE_OAUTH_CLIENT_ID:
-                    st.link_button("Google", build_google_auth_url(), use_container_width=True)
+                        st.error(f"❌ {err}")
+        
+        with col_b:
+            if GOOGLE_OAUTH_CLIENT_ID:
+                st.link_button("🔵 Google", build_google_auth_url(), use_container_width=True)
     
+    st.markdown("</div>", unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
     st.stop()
 
 st.sidebar.markdown('<div class="ig-logo">🕷️ RoadPulse</div>', unsafe_allow_html=True)
