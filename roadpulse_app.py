@@ -1466,40 +1466,50 @@ if st.session_state.current_user is None:
                             st.error(err)
             else:
                 if GOOGLE_OAUTH_CLIENT_ID:
-                    if st.button("🔵 Sign in with Google", use_container_width=True):
-                        st.markdown(f"[Click here to continue]({build_google_auth_url()})", unsafe_allow_html=True)
+                    st.link_button("🔵 Sign in with Google", build_google_auth_url(), use_container_width=True)
                 else:
                     st.caption("Google sign-in not configured.")
             st.markdown("</div>", unsafe_allow_html=True)
         
         with local_tab:
-            login_signup_choice = st.radio("", ["Sign In", "Sign Up"], label_visibility="collapsed", horizontal=True)
+            login_signup_choice = st.radio("", ["Sign In", "Sign Up", "Demo"], label_visibility="collapsed", horizontal=True)
             
             if login_signup_choice == "Sign In":
                 st.markdown("<div style='text-align: center;'>", unsafe_allow_html=True)
                 login_username = st.text_input("Handle", key="splash_login_username")
                 login_password = st.text_input("Password", type="password", key="splash_login_password")
                 if st.button("Sign In", key="splash_login_btn", use_container_width=True):
-                    if verify_user(login_username.strip(), login_password):
-                        st.session_state.current_user = login_username.strip()
-                        st.rerun()
+                    if login_username.strip() and login_password:
+                        if verify_user(login_username.strip(), login_password):
+                            st.session_state.current_user = login_username.strip()
+                            st.rerun()
+                        else:
+                            st.error("❌ Invalid credentials.")
                     else:
-                        st.error("Invalid credentials.")
+                        st.error("❌ Enter username and password.")
                 st.markdown("</div>", unsafe_allow_html=True)
-            else:
+            elif login_signup_choice == "Sign Up":
                 st.markdown("<div style='text-align: center;'>", unsafe_allow_html=True)
                 signup_username = st.text_input("Choose Handle", key="splash_signup_username")
                 signup_password = st.text_input("Password", type="password", key="splash_signup_password")
                 if st.button("Create Account", key="splash_signup_btn", use_container_width=True):
                     if not signup_username.strip() or not signup_password:
-                        st.error("Both fields required.")
+                        st.error("❌ Both fields required.")
                     else:
                         ok, err = create_user(signup_username.strip(), signup_password)
                         if ok:
                             st.session_state.current_user = signup_username.strip()
                             st.rerun()
                         else:
-                            st.error(err)
+                            st.error(f"❌ {err}")
+                st.markdown("</div>", unsafe_allow_html=True)
+            else:  # Demo mode
+                st.markdown("<div style='text-align: center; padding: 20px;'>", unsafe_allow_html=True)
+                st.info("🕷️ Entering demo mode - you can explore the app!")
+                demo_username = "DemoUser"
+                if st.button("Enter Demo Mode", key="demo_btn", use_container_width=True):
+                    st.session_state.current_user = demo_username
+                    st.rerun()
                 st.markdown("</div>", unsafe_allow_html=True)
         
         st.markdown("</div>", unsafe_allow_html=True)
