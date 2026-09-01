@@ -1,13 +1,71 @@
 """
-RoadPulse - "Friendly Neighborhood Road Watch // Spidey Edition"
-A sleek, modern civic platform prototype built with Streamlit + Google Maps + SQLite + Groq.
+RoadPulse - "Google Reviews for Roads"
+A civic platform prototype built with Streamlit + Google Maps + SQLite.
 
 Run with:
     pip install -r requirements.txt
     streamlit run roadpulse_app.py
+
+REQUIRED: a Google Maps JavaScript API key (needs a GCP project with
+billing enabled - Google gives a monthly free usage credit, but the API
+itself won't load without billing turned on).
+    1. https://console.cloud.google.com -> create/select a project
+    2. Enable "Maps JavaScript API"
+    3. Create an API key (APIs & Services > Credentials)
+    4. PowerShell: $env:GOOGLE_MAPS_API_KEY = "AIza..."
+    Then run streamlit in the SAME terminal window.
+
+OPTIONAL: "Sign in with Google" (local username/password accounts always
+still work without this - it's an additional option, not a replacement).
+    1. https://console.cloud.google.com -> APIs & Services -> OAuth consent screen
+       (External is fine for a demo; add your own Google account as a test user)
+    2. APIs & Services -> Credentials -> Create Credentials -> OAuth client ID -> Web application
+       Authorized redirect URI: http://localhost:8501  (must match exactly, no trailing slash)
+    3. PowerShell:
+       $env:GOOGLE_OAUTH_CLIENT_ID = "....apps.googleusercontent.com"
+       $env:GOOGLE_OAUTH_CLIENT_SECRET = "..."
+    Then run streamlit in the SAME terminal window.
+
+Architecture note: there is no mature "streamlit-folium"-equivalent for
+Google Maps, so the map is a small HAND-BUILT Streamlit component
+(./gmaps_component/index.html) - plain HTML/JS, no npm/React build.
+It talks to Google Maps directly and reports clicks/drawn lines back to
+Python via Streamlit's component wire protocol.
+
+Features in this version:
+    - Sign up / sign in (hashed passwords, SQLite-backed). Submitting,
+      upvoting, replying, and marking-fixed all require an account.
+    - One-upvote-per-account per review, enforced with a DB unique
+      constraint (not just client-side).
+    - Named replies - every reply shows who posted it.
+    - Point OR drawn-segment reviews, with click-to-select and a draw tool.
+    - "Use my current location" via browser geolocation.
+    - A free location SEARCH box (OpenStreetMap Nominatim, no API key -
+      independent of the Google Maps switch, so no billing needed for this part).
+    - Before/After Fix Proof: mark a road Fixed with a photo, flips its pin green.
+    - Civic Score & badges, tied to your account (persists across sessions).
+    - Municipal Repair Priority Heatmap (Google Maps visualization library).
+    - SLA countdown timer: a public 30-day repair clock on severe, open issues.
+    - Municipal complaint auto-fill: known real portal for Chennai, reverse-
+      geocoded generic fallback everywhere else. Optional AI (Groq /
+      openai/gpt-oss-120b) button to polish the complaint wording - needs
+      GROQ_API_KEY, degrades gracefully.
+    - Computer Vision damage verification: an uploaded photo is checked by
+      an open-source vision model (Qwen 3.6 27B, served via Groq) to
+      confirm it's actually road damage (filters out irrelevant/joke
+      images) and classify severity, auto-filling the category/rating.
+      Reuses GROQ_API_KEY - no separate key needed.
+    - Community News Feed: real Google News RSS headlines about road issues,
+      upvotable by the community (NOT Facebook scraping - see comment on
+      fetch_news_rss for why that's off the table).
+    - Hero-inspired red/blue/web visual theme (original CSS, no copyrighted
+      artwork/logos reproduced).
+
+NOTE on auth: this uses a simple SHA-256 hashed password stored in SQLite -
+good enough for a hackathon demo, but a real deployment would want salted
+hashing (bcrypt/argon2) and proper session/token management.
 """
 
-import base64
 import hashlib
 import json
 import os
@@ -34,8 +92,14 @@ CATEGORIES = ["Pothole", "Waterlogging", "Traffic/Cracks"]
 SLA_DAYS = 30
 
 # --------------------------------------------------------------------------
-# MUNICIPAL DIRECTORY & ROUTING
+# Municipal complaint routing
 # --------------------------------------------------------------------------
+# We only have ONE real, verified portal on file: Greater Chennai
+# Corporation's PGR system. For anywhere else, we reverse-geocode the
+# review's coordinates to find the local district/city name, and if it's
+# not a place we recognize, we hand the citizen a pre-filled generic
+# complaint plus a search link to find their own municipal office's
+# portal - honest about what we do and don't actually know.
 MUNICIPALITY_DIRECTORY = {
     "chennai": {
         "name": "Greater Chennai Corporation (GCC)",
@@ -47,8 +111,12 @@ MUNICIPALITY_DIRECTORY = {
         },
     },
 }
-GCC_DETAILS_MAX_CHARS = 400
+GCC_DETAILS_MAX_CHARS = 400  # matches the real GCC portal's "Details of Complaint" field limit
 
+# Generic fallback office terminology by country - "Municipal Corporation
+# / Panchayat Office" means nothing in Miami, just like "City Hall / 311"
+# would sound odd for rural India. Keyed by ISO 3166-1 alpha-2 country
+# code (what Nominatim's reverse-geocode returns), lowercase.
 COUNTRY_OFFICE_LABELS = {
     "in": "Municipal Corporation / Panchayat Office",
     "us": "City Hall / Department of Public Works (311)",
@@ -62,16 +130,28 @@ COUNTRY_OFFICE_LABELS = {
 }
 DEFAULT_OFFICE_LABEL = "Local Government / Public Works Office"
 
-SUBMISSION_COOLDOWN_SECONDS = 120
-DUPLICATE_RADIUS_METERS = 40
+# --------------------------------------------------------------------------
+# Anti-spam / anti-duplicate settings
+# --------------------------------------------------------------------------
+SUBMISSION_COOLDOWN_SECONDS = 120  # 2 minutes between reviews, per account - adjust to taste
+DUPLICATE_RADIUS_METERS = 40  # same-category open report within this radius = "already reported"
 
 
 @st.cache_data(ttl=3600)
 def reverse_geocode(lat, lon):
+    """
+    Free, no-API-key reverse geocoding via OpenStreetMap's Nominatim -
+    turns a review's coordinates into a district/city name AND a country
+    code, so we know both which municipal office it falls under and what
+    to CALL that office (terminology varies wildly by country). Cached
+    for an hour (keyed on rounded coordinates by the caller) since
+    Nominatim asks callers not to hammer it with repeat requests.
+    Returns (district_name, country_code) - both None on network failure.
+    """
     url = "https://nominatim.openstreetmap.org/reverse?" + urllib.parse.urlencode(
         {"lat": lat, "lon": lon, "format": "json", "zoom": 10, "addressdetails": 1}
     )
-    request = urllib.request.Request(url, headers={"User-Agent": "RoadPulse-Spidey-Watch/3.0"})
+    request = urllib.request.Request(url, headers={"User-Agent": "RoadPulse-Hackathon-Prototype/1.0"})
     try:
         with urllib.request.urlopen(request, timeout=6) as response:
             data = json.loads(response.read().decode("utf-8"))
@@ -87,6 +167,12 @@ def reverse_geocode(lat, lon):
 
 
 def get_municipality_info(row):
+    """
+    Returns (municipality_info_dict, is_known_real_portal). For an
+    unrecognized district, builds a Google search link instead of
+    guessing a URL we can't verify, and picks office terminology that
+    actually matches the country the review is in.
+    """
     district_name, country_code = reverse_geocode(round(row["lat"], 3), round(row["lon"], 3))
 
     if district_name:
@@ -95,6 +181,7 @@ def get_municipality_info(row):
             if name_key in key:
                 return info, True
 
+    # Unknown / unmatched district - generic fallback, no invented portal URL.
     label = district_name or "your area"
     office_label = COUNTRY_OFFICE_LABELS.get(country_code, DEFAULT_OFFICE_LABEL)
     search_query = urllib.parse.quote_plus(f"{label} {office_label} public grievance road repair complaint")
@@ -106,308 +193,492 @@ def get_municipality_info(row):
         },
         False,
     )
-
-
 GOOGLE_MAPS_API_KEY = os.environ.get("GOOGLE_MAPS_API_KEY", "")
 GOOGLE_OAUTH_CLIENT_ID = os.environ.get("GOOGLE_OAUTH_CLIENT_ID", "")
 GOOGLE_OAUTH_CLIENT_SECRET = os.environ.get("GOOGLE_OAUTH_CLIENT_SECRET", "")
 GOOGLE_OAUTH_REDIRECT_URI = os.environ.get("GOOGLE_OAUTH_REDIRECT_URI", "http://localhost:8501")
 
-st.set_page_config(
-    page_title="RoadPulse · Spidey Watch Edition",
-    page_icon="🕷️",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+st.set_page_config(page_title="RoadPulse", page_icon="🛰️", layout="wide")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 # --------------------------------------------------------------------------
-# SPIDER-VERSE // CYBER-SUIT HUD PREMIUM THEME
+# THEME - "Neon Grid" cyberpunk HUD look: dark space background, animated
+# scan-grid, glassmorphic panels, neon cyan/magenta/violet glow. Pure CSS
+# (Google Fonts + hand-rolled gradients/keyframes) - no copyrighted art.
 # --------------------------------------------------------------------------
 st.markdown(
     """
     <style>
-    @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;600;700&family=Cinzel:wght@700;900&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Rajdhani:wght@400;500;600;700&family=Share+Tech+Mono&display=swap');
 
     :root {
-        --spidey-red: #FF2A54;
-        --spidey-red-glow: rgba(255, 42, 84, 0.35);
-        --spidey-blue: #00D2FF;
-        --spidey-blue-glow: rgba(0, 210, 255, 0.25);
-        --spidey-dark: #070A12;
-        --spidey-card: rgba(15, 20, 36, 0.78);
-        --spidey-border: rgba(255, 255, 255, 0.09);
-        --text-pure: #FFFFFF;
-        --text-dim: #94A3B8;
+        --neon-cyan: #00f0ff;
+        --neon-magenta: #ff2bd6;
+        --neon-violet: #7b2ff7;
+        --neon-amber: #ffb347;
+        --glass-bg: rgba(10, 14, 30, 0.55);
+        --glass-border: rgba(0, 240, 255, 0.35);
+        --grid-line: rgba(0, 240, 255, 0.07);
     }
 
-    * {
-        font-family: 'Plus Jakarta Sans', sans-serif;
+    @keyframes gridDrift {
+        0%   { background-position: 0 0, 0 0; }
+        100% { background-position: 80px 80px, -80px 80px; }
+    }
+    @keyframes glowPulse {
+        0%, 100% { opacity: 0.55; }
+        50%      { opacity: 1; }
+    }
+    @keyframes neonText {
+        0%, 100% { filter: drop-shadow(0 0 6px rgba(0,240,255,0.75)) drop-shadow(0 0 18px rgba(123,47,247,0.45)); }
+        50%      { filter: drop-shadow(0 0 12px rgba(255,43,214,0.85)) drop-shadow(0 0 26px rgba(0,240,255,0.55)); }
+    }
+    @keyframes ringPulse {
+        0%   { transform: scale(0.7); opacity: 0.9; }
+        80%  { transform: scale(1.9); opacity: 0; }
+        100% { transform: scale(1.9); opacity: 0; }
+    }
+    @keyframes barFill {
+        0%   { width: 4%; }
+        100% { width: 100%; }
+    }
+    @keyframes fadeUp {
+        0%   { opacity: 0; transform: translateY(14px); }
+        100% { opacity: 1; transform: translateY(0); }
     }
 
-    /* Ambient Spider-Verse Mesh Glow + Web Lattice Pattern */
+    html, body, [class*="css"] { font-family: 'Rajdhani', sans-serif !important; }
+
     .stApp {
         background:
-            radial-gradient(ellipse 60% 40% at 50% -10%, rgba(255, 42, 84, 0.18) 0%, transparent 60%),
-            radial-gradient(circle at 10% 30%, rgba(0, 210, 255, 0.1) 0%, transparent 45%),
-            radial-gradient(circle at 90% 70%, rgba(255, 42, 84, 0.08) 0%, transparent 45%),
-            repeating-radial-gradient(circle at 50% 50%,
-                rgba(255, 42, 84, 0.02) 0px, rgba(255, 42, 84, 0.02) 1px,
-                transparent 1px, transparent 60px),
-            #070A12;
-        color: var(--text-pure);
+            linear-gradient(rgba(0,240,255,0.05) 1px, transparent 1px) 0 0 / 80px 80px,
+            linear-gradient(90deg, rgba(0,240,255,0.05) 1px, transparent 1px) 0 0 / 80px 80px,
+            radial-gradient(circle at 20% 0%, rgba(123,47,247,0.18) 0%, transparent 45%),
+            radial-gradient(circle at 85% 15%, rgba(0,240,255,0.14) 0%, transparent 40%),
+            radial-gradient(circle at 50% 100%, rgba(255,43,214,0.10) 0%, transparent 45%),
+            #04050d;
+        animation: gridDrift 14s linear infinite;
     }
 
-    /* Headings */
-    h1, h2, h3, h4, h5, h6 {
-        font-family: 'Plus Jakarta Sans', sans-serif !important;
-        font-weight: 800 !important;
-        letter-spacing: -0.02em !important;
-        color: #FFFFFF !important;
-        text-shadow: 0 0 20px rgba(255, 42, 84, 0.2) !important;
+    h1, h2, h3 {
+        font-family: 'Orbitron', sans-serif !important;
+        letter-spacing: 1.5px;
+        color: #eafcff !important;
+        text-shadow: 0 0 10px rgba(0,240,255,0.55), 0 0 22px rgba(123,47,247,0.35) !important;
     }
 
-    /* Spidey Hero Header */
-    .hero-header {
-        position: relative;
-        background: linear-gradient(135deg, rgba(28, 14, 28, 0.85) 0%, rgba(11, 18, 38, 0.88) 100%);
-        border: 1px solid rgba(255, 42, 84, 0.25);
-        border-radius: 20px;
-        padding: 28px 34px;
-        margin-bottom: 24px;
-        backdrop-filter: blur(20px);
-        box-shadow: 0 16px 40px -10px rgba(0, 0, 0, 0.6), 0 0 30px rgba(255, 42, 84, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.15);
-        overflow: hidden;
-    }
-    .hero-header::before {
-        content: '';
-        position: absolute;
-        top: 0; left: 0; right: 0; height: 3px;
-        background: linear-gradient(90deg, transparent, #FF2A54, #00D2FF, #FF2A54, transparent);
-    }
-    .spidey-radar-badge {
-        display: inline-flex;
-        align-items: center;
-        gap: 8px;
-        font-family: 'JetBrains Mono', monospace;
-        font-size: 11px;
-        font-weight: 700;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
-        color: #FF2A54;
-        background: rgba(255, 42, 84, 0.12);
-        border: 1px solid rgba(255, 42, 84, 0.4);
-        padding: 5px 14px;
-        border-radius: 9999px;
-        margin-bottom: 12px;
-        box-shadow: 0 0 14px rgba(255, 42, 84, 0.25);
-    }
-    .hero-title {
-        font-size: 2.25rem !important;
-        font-weight: 900 !important;
-        background: linear-gradient(135deg, #FFFFFF 20%, #FF8099 70%, #00D2FF 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        margin: 0 0 8px 0 !important;
-    }
-    .hero-subtitle {
-        color: #CBD5E1;
-        font-size: 0.98rem;
-        margin: 0;
-        max-width: 680px;
-        line-height: 1.55;
-    }
-
-    /* Sidebar HUD Styling */
     section[data-testid="stSidebar"] {
-        background: rgba(10, 14, 26, 0.95) !important;
-        border-right: 1px solid rgba(255, 42, 84, 0.2) !important;
-        backdrop-filter: blur(24px);
+        background: linear-gradient(180deg, rgba(6,8,20,0.96) 0%, rgba(10,6,24,0.96) 100%);
+        border-right: 1px solid var(--glass-border);
+        box-shadow: 4px 0 24px rgba(0,240,255,0.08);
     }
-    section[data-testid="stSidebar"] hr {
-        border-color: rgba(255, 255, 255, 0.08) !important;
-        margin: 18px 0;
-    }
-
-    /* Spidey Profile Card */
-    .spidey-profile-card {
-        background: linear-gradient(135deg, rgba(38, 14, 28, 0.75) 0%, rgba(13, 22, 45, 0.85) 100%);
-        border: 1px solid rgba(255, 42, 84, 0.35);
-        border-radius: 16px;
-        padding: 16px 18px;
-        margin-bottom: 14px;
-        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35), 0 0 16px rgba(255, 42, 84, 0.15);
-    }
-    .spidey-points-pill {
-        display: inline-block;
-        background: linear-gradient(135deg, rgba(255, 42, 84, 0.2) 0%, rgba(0, 210, 255, 0.2) 100%);
-        color: #FFFFFF;
-        border: 1px solid rgba(255, 255, 255, 0.25);
-        padding: 3px 12px;
-        border-radius: 9999px;
-        font-size: 12px;
-        font-weight: 800;
-        box-shadow: 0 0 10px rgba(0, 210, 255, 0.2);
+    section[data-testid="stSidebar"] h1, section[data-testid="stSidebar"] h2, section[data-testid="stSidebar"] h3 {
+        font-size: 1.05rem !important;
     }
 
-    /* Tabs Styling */
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 10px;
-        background: rgba(14, 18, 32, 0.75);
-        padding: 6px;
-        border-radius: 14px;
-        border: 1px solid rgba(255, 255, 255, 0.08);
-        margin-bottom: 22px;
-    }
-    .stTabs [data-baseweb="tab"] {
-        border-radius: 10px !important;
-        padding: 10px 20px !important;
-        font-weight: 700 !important;
-        font-size: 13px !important;
-        letter-spacing: 0.02em;
-        color: var(--text-dim) !important;
+    /* Buttons - neon gradient with glow */
+    div.stButton > button, .stForm button, div.stLinkButton > a, div.stDownloadButton > button {
+        background: linear-gradient(120deg, var(--neon-violet) 0%, var(--neon-cyan) 55%, var(--neon-magenta) 100%) !important;
+        background-size: 200% 200% !important;
+        color: #04050d !important;
         border: none !important;
-        background: transparent !important;
-        transition: all 0.25s ease;
+        font-family: 'Orbitron', sans-serif !important;
+        font-weight: 700 !important;
+        letter-spacing: 1px;
+        text-transform: uppercase;
+        font-size: 12.5px !important;
+        border-radius: 10px !important;
+        box-shadow: 0 0 14px rgba(0,240,255,0.45), 0 0 30px rgba(123,47,247,0.25);
+        transition: all 0.2s ease-in-out;
+    }
+    div.stButton > button:hover, div.stLinkButton > a:hover, div.stDownloadButton > button:hover {
+        background-position: 100% 50% !important;
+        box-shadow: 0 0 22px rgba(0,240,255,0.75), 0 0 46px rgba(255,43,214,0.45);
+        transform: translateY(-1px);
+        color: #04050d !important;
+    }
+
+    /* Text inputs / selects / textareas - dark glass with neon focus */
+    div[data-baseweb="input"], div[data-baseweb="base-input"], div[data-baseweb="select"] > div,
+    div[data-baseweb="textarea"], textarea, .stTextInput input, .stNumberInput input {
+        background-color: rgba(8, 10, 24, 0.75) !important;
+        border: 1px solid rgba(0,240,255,0.28) !important;
+        color: #eafcff !important;
+        border-radius: 8px !important;
+    }
+    div[data-baseweb="input"]:focus-within, div[data-baseweb="select"] > div:focus-within,
+    div[data-baseweb="textarea"]:focus-within {
+        border-color: var(--neon-cyan) !important;
+        box-shadow: 0 0 10px rgba(0,240,255,0.55) !important;
+    }
+
+    .hero-banner {
+        background: linear-gradient(120deg, rgba(123,47,247,0.22) 0%, rgba(4,5,13,0.4) 70%);
+        border: 1px solid var(--glass-border);
+        border-radius: 18px;
+        backdrop-filter: blur(10px);
+        padding: 22px 28px;
+        margin: -16px -16px 22px -16px;
+        position: relative;
+        overflow: hidden;
+        animation: fadeUp 0.6s ease-out;
+    }
+    .hero-banner::before {
+        content: "";
+        position: absolute; inset: 0;
+        background: linear-gradient(90deg, transparent, rgba(0,240,255,0.5), transparent);
+        height: 2px; top: 0; left: -100%;
+        animation: scanLine 3.5s linear infinite;
+    }
+    @keyframes scanLine { 0% { left: -100%; } 100% { left: 100%; } }
+    .hero-banner .eyebrow {
+        font-family: 'Share Tech Mono', monospace;
+        letter-spacing: 3px;
+        color: var(--neon-cyan);
+        font-size: 12px;
+        text-transform: uppercase;
+    }
+    .hero-banner h1 {
+        margin: 6px 0 8px 0 !important;
+        font-size: 2.5rem !important;
+        background: linear-gradient(90deg, var(--neon-cyan), var(--neon-magenta) 60%, var(--neon-violet));
+        -webkit-background-clip: text; background-clip: text; color: transparent !important;
+        text-shadow: none !important;
+        animation: neonText 3.5s ease-in-out infinite;
+    }
+    .hero-banner p {
+        color: #cfe8ff;
+        margin: 0;
+        max-width: 640px;
+        font-size: 1.02rem;
+    }
+    .pulse-badge {
+        position: absolute;
+        top: 22px;
+        right: 28px;
+        background: rgba(0,240,255,0.08);
+        color: var(--neon-cyan);
+        border: 1px solid var(--neon-cyan);
+        font-family: 'Share Tech Mono', monospace;
+        font-size: 12px;
+        letter-spacing: 1.5px;
+        padding: 6px 14px;
+        border-radius: 999px;
+        box-shadow: 0 0 12px rgba(0,240,255,0.45);
+        animation: glowPulse 2s ease-in-out infinite;
+    }
+    .pulse-badge::before {
+        content: "●"; margin-right: 6px; color: #4dffb8;
+    }
+
+    .hero-card {
+        background: var(--glass-bg);
+        backdrop-filter: blur(8px);
+        border: 1px solid var(--glass-border);
+        border-radius: 14px;
+        padding: 12px 14px;
+        margin-bottom: 10px;
+        color: #eafcff;
+        box-shadow: 0 0 16px rgba(0,240,255,0.12);
+    }
+    .hero-card b { color: var(--neon-cyan); }
+
+    .stTabs [data-baseweb="tab-list"] { gap: 6px; }
+    .stTabs [data-baseweb="tab"] {
+        font-family: 'Orbitron', sans-serif !important;
+        font-size: 13px;
+        letter-spacing: 1px;
+        color: #9fb4d8 !important;
+        border-radius: 10px 10px 0 0 !important;
     }
     .stTabs [aria-selected="true"] {
-        background: linear-gradient(135deg, rgba(255, 42, 84, 0.25) 0%, rgba(0, 210, 255, 0.18) 100%) !important;
-        color: #FFFFFF !important;
-        border: 1px solid rgba(255, 42, 84, 0.45) !important;
-        box-shadow: 0 4px 16px rgba(255, 42, 84, 0.25) !important;
+        color: var(--neon-cyan) !important;
+        border-bottom: 2px solid var(--neon-cyan) !important;
+        text-shadow: 0 0 8px rgba(0,240,255,0.65);
     }
 
-    /* Dual-Tone Action Buttons */
-    div.stButton > button, div.stLinkButton > a, .stForm button {
-        background: linear-gradient(135deg, #FF2A54 0%, #B80036 100%) !important;
-        color: #FFFFFF !important;
-        border: 1px solid rgba(255, 255, 255, 0.25) !important;
-        border-radius: 11px !important;
-        padding: 9px 20px !important;
-        font-weight: 700 !important;
-        font-size: 13px !important;
-        letter-spacing: 0.02em;
-        box-shadow: 0 4px 16px rgba(255, 42, 84, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.3) !important;
-        transition: all 0.2s ease !important;
-    }
-    div.stButton > button:hover, div.stLinkButton > a:hover, .stForm button:hover {
-        background: linear-gradient(135deg, #FF456A 0%, #D6003E 100%) !important;
-        border-color: rgba(255, 255, 255, 0.4) !important;
-        box-shadow: 0 6px 24px rgba(255, 42, 84, 0.55) !important;
-        transform: translateY(-2px);
-    }
-
-    /* Modern Glassmorphic Expanders */
     div[data-testid="stExpander"] {
-        background: var(--spidey-card) !important;
-        border: 1px solid var(--spidey-border) !important;
-        border-radius: 14px !important;
-        box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35) !important;
-        margin-bottom: 14px !important;
-        transition: all 0.2s ease;
-    }
-    div[data-testid="stExpander"]:hover {
-        border-color: rgba(255, 42, 84, 0.35) !important;
+        border: 1px solid var(--glass-border) !important;
+        border-radius: 12px !important;
+        background: rgba(8,10,24,0.4) !important;
+        backdrop-filter: blur(6px);
     }
 
-    /* Metrics Styling */
     div[data-testid="stMetricValue"] {
-        font-size: 1.7rem !important;
-        font-weight: 900 !important;
-        background: linear-gradient(135deg, #FFFFFF 40%, #FF8099 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-    }
-    div[data-testid="stMetricLabel"] {
-        font-size: 0.82rem !important;
-        font-weight: 700 !important;
-        color: #94A3B8 !important;
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
+        color: var(--neon-magenta) !important;
+        font-family: 'Orbitron', sans-serif !important;
+        text-shadow: 0 0 10px rgba(255,43,214,0.5);
     }
 
-    /* Badges */
-    .spidey-pill {
-        display: inline-flex;
-        align-items: center;
-        gap: 5px;
-        padding: 3px 12px;
-        border-radius: 9999px;
-        font-size: 11px;
-        font-weight: 800;
-        letter-spacing: 0.03em;
-    }
-    .spidey-pill-open {
-        background: rgba(255, 42, 84, 0.15);
-        color: #FF5C7A;
-        border: 1px solid rgba(255, 42, 84, 0.4);
-    }
-    .spidey-pill-fixed {
-        background: rgba(0, 210, 255, 0.15);
-        color: #38BDF8;
-        border: 1px solid rgba(0, 210, 255, 0.4);
+    div[data-testid="stContainer"], div[data-testid="stVerticalBlockBorderWrapper"] {
+        border-radius: 14px !important;
     }
 
-    /* Daily Bugle Header & Articles */
-    .bugle-masthead {
-        background: linear-gradient(135deg, rgba(20, 10, 10, 0.9) 0%, rgba(10, 15, 30, 0.9) 100%);
-        border: 2px solid #FF2A54;
-        border-radius: 14px;
-        padding: 16px;
-        margin-bottom: 20px;
-        text-align: center;
-        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5), inset 0 0 20px rgba(255, 42, 84, 0.1);
+    ::-webkit-scrollbar { width: 10px; height: 10px; }
+    ::-webkit-scrollbar-track { background: #04050d; }
+    ::-webkit-scrollbar-thumb {
+        background: linear-gradient(var(--neon-cyan), var(--neon-violet));
+        border-radius: 6px;
     }
-    .bugle-title {
-        font-family: 'Cinzel', serif !important;
-        font-size: 2.2rem !important;
-        font-weight: 900 !important;
+
+    /* ---- Splash screen ---- */
+    .splash-wrap {
+        min-height: 78vh;
+        display: flex; flex-direction: column; align-items: center; justify-content: center;
+        text-align: center; padding-top: 4vh;
+        animation: fadeUp 0.7s ease-out;
+    }
+    .splash-core {
+        position: relative;
+        width: 160px; height: 160px;
+        display: flex; align-items: center; justify-content: center;
+        margin-bottom: 18px;
+    }
+    .splash-ring {
+        position: absolute; inset: 0;
+        border: 2px solid var(--neon-cyan);
+        border-radius: 50%;
+        animation: ringPulse 2.4s ease-out infinite;
+    }
+    .splash-ring.ring2 { border-color: var(--neon-magenta); animation-delay: 0.8s; }
+    .splash-ring.ring3 { border-color: var(--neon-violet); animation-delay: 1.6s; }
+    .splash-logo {
+        font-size: 56px;
+        filter: drop-shadow(0 0 14px rgba(0,240,255,0.85));
+        animation: glowPulse 2s ease-in-out infinite;
+    }
+    .splash-title {
+        font-family: 'Orbitron', sans-serif;
+        font-size: 3rem;
+        font-weight: 900;
+        letter-spacing: 6px;
+        color: #eafcff;
+        animation: neonText 3s ease-in-out infinite;
+    }
+    .splash-title span { color: var(--neon-magenta); }
+    .splash-sub {
+        font-family: 'Share Tech Mono', monospace;
+        color: var(--neon-cyan);
         letter-spacing: 3px;
-        color: #F8FAFC !important;
-        margin: 0 !important;
-        text-shadow: 0 0 10px rgba(255, 42, 84, 0.5) !important;
+        font-size: 13px;
+        margin-top: 6px;
+        margin-bottom: 26px;
     }
-    .bugle-tagline {
-        font-family: 'JetBrains Mono', monospace;
-        font-size: 11px;
-        letter-spacing: 2px;
-        color: #00D2FF;
-        text-transform: uppercase;
-        margin-top: 4px;
+    .splash-bar {
+        width: 320px; max-width: 70vw; height: 6px;
+        background: rgba(0,240,255,0.12);
+        border-radius: 4px;
+        overflow: hidden;
+        border: 1px solid rgba(0,240,255,0.35);
+        margin-bottom: 10px;
     }
-    .news-card {
-        background: linear-gradient(135deg, rgba(18, 24, 44, 0.8) 0%, rgba(12, 16, 32, 0.9) 100%);
-        border: 1px solid rgba(255, 255, 255, 0.08);
-        border-radius: 14px;
-        padding: 18px 22px;
-        margin-bottom: 14px;
-        transition: all 0.2s ease;
+    .splash-bar-fill {
+        height: 100%;
+        background: linear-gradient(90deg, var(--neon-violet), var(--neon-cyan), var(--neon-magenta));
+        animation: barFill 2.6s ease-in-out forwards;
+        box-shadow: 0 0 10px rgba(0,240,255,0.8);
     }
-    .news-card:hover {
-        border-color: rgba(0, 210, 255, 0.4);
-        box-shadow: 0 8px 28px rgba(0, 0, 0, 0.4), 0 0 16px rgba(0, 210, 255, 0.12);
-        transform: translateY(-1px);
+    .splash-status {
+        font-family: 'Share Tech Mono', monospace;
+        color: #7fa8c9;
+        font-size: 12px;
+        letter-spacing: 1.5px;
+        margin-bottom: 22px;
     }
-    .news-title {
-        font-size: 1.05rem;
-        font-weight: 700;
-        color: #FFFFFF;
+
+    /* ---- Auth page ---- */
+    .auth-card {
+        background: var(--glass-bg);
+        backdrop-filter: blur(14px);
+        border: 1px solid var(--glass-border);
+        border-radius: 20px;
+        padding: 26px 30px 6px 30px;
+        text-align: center;
+        margin-bottom: 6px;
+        box-shadow: 0 0 30px rgba(0,240,255,0.12);
+        animation: fadeUp 0.6s ease-out;
+    }
+    .auth-eyebrow {
+        font-family: 'Share Tech Mono', monospace;
+        color: var(--neon-cyan);
+        letter-spacing: 3px;
+        font-size: 12px;
         margin-bottom: 6px;
     }
-    .news-meta {
-        font-size: 0.82rem;
-        color: #94A3B8;
+    .auth-title {
+        font-size: 1.8rem !important;
+        margin: 4px 0 8px 0 !important;
+        background: linear-gradient(90deg, var(--neon-cyan), var(--neon-magenta));
+        -webkit-background-clip: text; background-clip: text; color: transparent !important;
+        text-shadow: none !important;
+    }
+    .auth-sub { color: #b9cfe8; font-size: 0.92rem; margin-bottom: 4px; }
+    .auth-divider {
+        text-align: center; color: #6d84a8; font-family: 'Share Tech Mono', monospace;
+        font-size: 11px; letter-spacing: 2px; margin: 14px 0 10px 0; text-transform: uppercase;
     }
     </style>
     """,
     unsafe_allow_html=True,
 )
 
+# Registers our hand-built HTML/JS components. `path` points at the folder
+# containing each index.html - no build step, Streamlit just serves it as-is.
 _component_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gmaps_component")
 gmaps_component = components.declare_component("gmaps_component", path=_component_dir)
 
 _geo_component_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "geo_component")
 geo_component = components.declare_component("geo_component", path=_geo_component_dir)
+
+
+# --------------------------------------------------------------------------
+# SPLASH SCREEN + ACCESS TERMINAL (auth page) - both take over the full
+# viewport (sidebar/header hidden) and are called with st.stop() right
+# after, so nothing below them renders until the user has passed through.
+# Functions live here (near the theme); they're invoked later in the
+# script, after the DB/auth helpers they depend on are defined - Python
+# resolves those names at call time, so definition order doesn't matter,
+# only that the *call* comes after the helpers are defined.
+# --------------------------------------------------------------------------
+def render_splash_screen():
+    """
+    Full-screen animated boot sequence. Auto-advances to the access
+    terminal (render_auth_page) after ~2.6s via a tiny injected script
+    that clicks the (styled-to-match) "ENTER SYSTEM" button - clicking it
+    manually works identically and immediately. Purely cosmetic/UX; no
+    data is gated behind the splash itself.
+    """
+    st.markdown(
+        """
+        <style>
+        section[data-testid="stSidebar"], header[data-testid="stHeader"] { display: none !important; }
+        </style>
+        <div class="splash-wrap">
+            <div class="splash-core">
+                <div class="splash-ring ring1"></div>
+                <div class="splash-ring ring2"></div>
+                <div class="splash-ring ring3"></div>
+                <div class="splash-logo">🛰️</div>
+            </div>
+            <div class="splash-title">ROAD<span>PULSE</span></div>
+            <div class="splash-sub">CIVIC INFRASTRUCTURE NETWORK // BOOT SEQUENCE</div>
+            <div class="splash-bar"><div class="splash-bar-fill"></div></div>
+            <div class="splash-status">CALIBRATING SENSOR GRID · LOADING MAP LAYERS · SYNCING CIVIC LEDGER</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    _, mid_col, _ = st.columns([1, 1, 1])
+    with mid_col:
+        if st.button("⚡ ENTER SYSTEM", key="splash_enter_btn", use_container_width=True):
+            st.session_state.splash_done = True
+            st.rerun()
+    # Auto-advance: finds the button above by its text and clicks it once
+    # the boot animation has had time to play. Best-effort only - if the
+    # Streamlit DOM structure changes, the manual button above still works.
+    components.html(
+        """
+        <script>
+        setTimeout(function() {
+            try {
+                const doc = window.parent.document;
+                const buttons = doc.querySelectorAll('button');
+                for (const b of buttons) {
+                    if (b.innerText && b.innerText.includes('ENTER SYSTEM')) {
+                        b.click();
+                        break;
+                    }
+                }
+            } catch (e) {}
+        }, 2600);
+        </script>
+        """,
+        height=0,
+    )
+
+
+def render_auth_page():
+    """
+    Full-page "access terminal" shown whenever nobody is signed in and the
+    citizen hasn't chosen to continue as a guest. Wraps the same auth
+    backend as before (local accounts + optional Google OAuth) in a
+    centered, styled page instead of tucking it into the sidebar.
+    Guest browsing is preserved as an explicit opt-out, not removed.
+    """
+    st.markdown(
+        """<style>section[data-testid="stSidebar"], header[data-testid="stHeader"] { display: none !important; }</style>""",
+        unsafe_allow_html=True,
+    )
+    _, mid_col, _ = st.columns([1, 1.3, 1])
+    with mid_col:
+        st.markdown(
+            """
+            <div class="auth-card">
+                <div class="auth-eyebrow">ROADPULSE // ACCESS TERMINAL</div>
+                <h1 class="auth-title">Identify Yourself, Citizen</h1>
+                <p class="auth-sub">Sign in to submit reports, upvote, and earn Civic Score - or continue scanning as a guest.</p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        if st.session_state.get("_oauth_error"):
+            st.error(st.session_state._oauth_error)
+            st.session_state._oauth_error = None
+
+        if st.session_state.get("_pending_google_email"):
+            # First-time Google sign-in - the account doesn't exist yet, so
+            # ask for a display username before creating it. This is what
+            # keeps a citizen's username from being forced to be their gmail.
+            pending_email = st.session_state._pending_google_email
+            st.success(f"Verified via Google as {pending_email} - choose a callsign to finish.")
+            chosen_username = st.text_input("Choose a username", key="google_username_choice")
+            if st.button("⚡ Confirm Username", key="confirm_google_username_btn", use_container_width=True):
+                if not chosen_username.strip():
+                    st.error("Please enter a username.")
+                else:
+                    ok, err = create_google_user(chosen_username.strip(), pending_email)
+                    if ok:
+                        st.session_state.current_user = chosen_username.strip()
+                        st.session_state._pending_google_email = None
+                        st.rerun()
+                    else:
+                        st.error(err)
+        else:
+            if GOOGLE_OAUTH_CLIENT_ID:
+                st.link_button("🔵 Sign in with Google", build_google_auth_url(), use_container_width=True)
+                st.markdown('<div class="auth-divider">— or use a local account —</div>', unsafe_allow_html=True)
+            else:
+                st.caption("Google sign-in not configured (set GOOGLE_OAUTH_CLIENT_ID/SECRET to enable it).")
+
+            login_tab, signup_tab = st.tabs(["🔐 Sign In", "🆕 Sign Up"])
+            with login_tab:
+                login_username = st.text_input("Username", key="login_username")
+                login_password = st.text_input("Password", type="password", key="login_password")
+                if st.button("Sign In", key="login_btn", use_container_width=True):
+                    if verify_user(login_username.strip(), login_password):
+                        st.session_state.current_user = login_username.strip()
+                        st.rerun()
+                    else:
+                        st.error("Invalid username or password.")
+            with signup_tab:
+                signup_username = st.text_input("Choose a username", key="signup_username")
+                signup_password = st.text_input("Choose a password", type="password", key="signup_password")
+                if st.button("Sign Up", key="signup_btn", use_container_width=True):
+                    if not signup_username.strip() or not signup_password:
+                        st.error("Username and password are both required.")
+                    else:
+                        ok, err = create_user(signup_username.strip(), signup_password)
+                        if ok:
+                            st.session_state.current_user = signup_username.strip()
+                            st.rerun()
+                        else:
+                            st.error(err)
+
+            st.markdown('<div class="auth-divider">— or —</div>', unsafe_allow_html=True)
+            if st.button("👁️ Continue browsing as Guest", key="guest_btn", use_container_width=True):
+                st.session_state.guest_mode = True
+                st.rerun()
 
 
 # --------------------------------------------------------------------------
@@ -435,7 +706,14 @@ def init_db():
     cursor.execute("PRAGMA table_info(users)")
     user_cols = [col[1] for col in cursor.fetchall()]
     if "email" not in user_cols:
+        # Separate from `username` on purpose: a Google account's verified
+        # email identifies WHO they are across logins, but the citizen
+        # still picks their own display username - the two shouldn't be
+        # forced to be the same thing.
         cursor.execute("ALTER TABLE users ADD COLUMN email TEXT")
+    # SQLite can't add a UNIQUE constraint via ALTER TABLE, so a partial
+    # unique index does the same job for the email column (multiple NULLs
+    # allowed, for local accounts with no linked Google email).
     cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(email) WHERE email IS NOT NULL")
 
     cursor.execute(
@@ -495,6 +773,11 @@ def init_db():
     if "username" not in reply_cols:
         cursor.execute("ALTER TABLE review_replies ADD COLUMN username TEXT DEFAULT 'Anonymous'")
 
+    # --- Community News Feed tables ---
+    # news_items holds articles pulled from Google News' public RSS feed
+    # (a legitimate, keyless, ToS-compliant source - unlike scraping
+    # Facebook, which we deliberately did NOT build; see the comment on
+    # fetch_news_rss for why).
     cursor.execute(
         """
         CREATE TABLE IF NOT EXISTS news_items (
@@ -510,6 +793,10 @@ def init_db():
     cursor.execute("PRAGMA table_info(news_items)")
     news_cols = [col[1] for col in cursor.fetchall()]
     if "search_query" not in news_cols:
+        # Ties each article to the search that found it, so the feed can
+        # actually filter by what's currently typed in the search box -
+        # without this, every fetch just piled into one shared pool and
+        # the displayed list never changed no matter what you searched.
         cursor.execute("ALTER TABLE news_items ADD COLUMN search_query TEXT")
     cursor.execute(
         """
@@ -524,11 +811,19 @@ def init_db():
         """
     )
 
+    # --- One-time self-healing migration for pre-fix news rows ---
+    # Older rows may have been saved with the RAW RFC-822 RSS date string
+    # ("Mon, 25 Aug 2026...") from before this was fixed to parse dates
+    # properly. Those don't sort correctly against the newer ISO-format
+    # rows ("2026-08-25 10:00:00"), so on every startup we detect and
+    # normalize any leftover raw-format rows in place - no manual DB
+    # cleanup required.
     cursor.execute("SELECT id, published FROM news_items")
     for news_id, published_value in cursor.fetchall():
         if not published_value:
             continue
         try:
+            # Already in our ISO format - nothing to do.
             datetime.strptime(published_value, "%Y-%m-%d %H:%M:%S")
         except ValueError:
             try:
@@ -538,7 +833,7 @@ def init_db():
                     (fixed_dt.strftime("%Y-%m-%d %H:%M:%S"), news_id),
                 )
             except (TypeError, ValueError):
-                pass
+                pass  # genuinely unparseable - leave it, it'll just sort a bit oddly
 
     conn.commit()
     conn.close()
@@ -548,7 +843,7 @@ init_db()
 
 
 # --------------------------------------------------------------------------
-# AUTHENTICATION
+# AUTH
 # --------------------------------------------------------------------------
 def hash_password(password):
     return hashlib.sha256(password.encode("utf-8")).hexdigest()
@@ -565,7 +860,7 @@ def create_user(username, password):
         conn.commit()
         return True, None
     except sqlite3.IntegrityError:
-        return False, "That citizen handle is already taken."
+        return False, "That username is already taken."
     finally:
         conn.close()
 
@@ -597,6 +892,7 @@ def add_civic_points(username, points):
 
 
 def build_google_auth_url():
+    """Builds the URL that sends the citizen to Google's own sign-in/consent screen."""
     params = {
         "client_id": GOOGLE_OAUTH_CLIENT_ID,
         "redirect_uri": GOOGLE_OAUTH_REDIRECT_URI,
@@ -609,6 +905,11 @@ def build_google_auth_url():
 
 
 def exchange_google_code(code):
+    """
+    Exchanges the one-time authorization code Google sent back for an
+    access token, then uses that token to fetch the verified email
+    address. Returns (email, error_message) - exactly one is None.
+    """
     token_url = "https://oauth2.googleapis.com/token"
     payload = urllib.parse.urlencode(
         {
@@ -633,16 +934,20 @@ def exchange_google_code(code):
             userinfo = json.loads(response.read().decode("utf-8"))
         return userinfo.get("email"), None
     except urllib.error.HTTPError as exc:
+        # Google's actual reason (invalid_client, invalid_grant, etc.) is in
+        # the response body - a bare str(exc) only gives "HTTP Error 401:
+        # Unauthorized" and throws that detail away, so read the body too.
         try:
             body = exc.read().decode("utf-8")
-        except Exception:
+        except Exception:  # noqa: BLE001
             body = "(no response body)"
         return None, f"Google sign-in failed: HTTP {exc.code} - {body}"
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - surface any other OAuth failure to the sidebar
         return None, f"Google sign-in failed: {exc}"
 
 
 def find_username_by_email(email):
+    """Looks up an existing account already linked to this Google email, if any."""
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT username FROM users WHERE email = ?", (email,))
@@ -652,6 +957,13 @@ def find_username_by_email(email):
 
 
 def create_google_user(username, email):
+    """
+    Creates a new account for a first-time Google sign-in, with a
+    citizen-chosen display username (never forced to be their email).
+    The stored password hash is a random throwaway value - this account
+    can only ever sign in via Google, never the local username/password
+    form. Returns (success, error_message).
+    """
     conn = get_connection()
     cursor = conn.cursor()
     try:
@@ -662,12 +974,13 @@ def create_google_user(username, email):
         conn.commit()
         return True, None
     except sqlite3.IntegrityError:
-        return False, "That handle is taken - try another."
+        return False, "That username is already taken - try another."
     finally:
         conn.close()
 
 
 def civic_badge(score):
+    """Hero-themed badge tiers for the Civic Score gamification feature."""
     if score >= 100:
         return "🕸️🦸 Amazing Spider-Citizen"
     elif score >= 50:
@@ -675,13 +988,19 @@ def civic_badge(score):
     elif score >= 20:
         return "🕷️ Web-Slinger in Training"
     else:
-        return "🏙️ Friendly Neighborhood Sentinel"
+        return "🏙️ Friendly Neighborhood Newbie"
 
 
 # --------------------------------------------------------------------------
-# REVIEW / DATA HELPERS
+# REVIEW / UPVOTE / REPLY DATA LAYER
 # --------------------------------------------------------------------------
 def get_seconds_since_last_submission(username):
+    """
+    Returns seconds since this account's most recent review, or None if
+    they've never submitted one. Backs the anti-spam cooldown - reading
+    MAX(timestamp) instead of a separate counter keeps this in sync with
+    the reviews table automatically, no extra bookkeeping table needed.
+    """
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT MAX(timestamp) FROM road_reviews WHERE username = ?", (username,))
@@ -694,8 +1013,9 @@ def get_seconds_since_last_submission(username):
 
 
 def haversine_distance_m(lat1, lon1, lat2, lon2):
+    """Great-circle distance between two points, in meters."""
     from math import radians, sin, cos, sqrt, atan2
-    R = 6371000
+    R = 6371000  # Earth's radius in meters
     phi1, phi2 = radians(lat1), radians(lat2)
     d_phi = radians(lat2 - lat1)
     d_lambda = radians(lon2 - lon1)
@@ -704,6 +1024,12 @@ def haversine_distance_m(lat1, lon1, lat2, lon2):
 
 
 def find_nearby_duplicate(lat, lon, category):
+    """
+    Checks for an existing OPEN review of the same category within
+    DUPLICATE_RADIUS_METERS - this is what stops five people creating five
+    separate pins for the same pothole instead of upvoting the one that's
+    already there. Returns the matching row as a dict, or None.
+    """
     conn = get_connection()
     df = pd.read_sql_query(
         "SELECT id, lat, lon, location_name FROM road_reviews WHERE category = ? AND status = 'Open'",
@@ -813,13 +1139,23 @@ def fetch_replies(review_id):
 
 
 # --------------------------------------------------------------------------
-# COMMUNITY NEWS FEED
+# COMMUNITY NEWS FEED (Google News RSS - NOT Facebook)
 # --------------------------------------------------------------------------
+# Your teammate's idea was to surface external reports of road problems
+# for the community to corroborate. Scraping Facebook posts isn't
+# something we can build - it violates Meta's terms of service regardless
+# of project size, and there's no public API for arbitrary post access.
+# Google News' RSS feed is the legitimate equivalent: public, keyless,
+# and explicitly meant to be consumed this way.
 def fetch_news_rss(query, max_items=10):
+    """
+    Pulls headlines from Google News' public RSS search feed. Returns a
+    list of dicts, or an empty list on any network/parsing failure.
+    """
     url = "https://news.google.com/rss/search?" + urllib.parse.urlencode(
         {"q": query, "hl": "en-IN", "gl": "IN", "ceid": "IN:en"}
     )
-    request = urllib.request.Request(url, headers={"User-Agent": "RoadPulse-Spidey-Watch/3.0"})
+    request = urllib.request.Request(url, headers={"User-Agent": "RoadPulse-Hackathon-Prototype/1.0"})
     try:
         with urllib.request.urlopen(request, timeout=8) as response:
             xml_bytes = response.read()
@@ -837,8 +1173,13 @@ def fetch_news_rss(query, max_items=10):
         link = item.findtext("link") or ""
         raw_pub_date = item.findtext("pubDate") or ""
         source_el = item.find("source")
-        source = source_el.text if source_el is not None else "Daily Bugle Wire"
+        source = source_el.text if source_el is not None else "Google News"
 
+        # RSS dates are RFC-822 strings ("Mon, 25 Aug 2026 10:00:00 GMT"),
+        # which do NOT sort correctly as plain text - this is the actual
+        # root cause of old articles behaving unpredictably in the feed.
+        # Parse to a real datetime and store it as a sortable ISO string;
+        # fall back to "now" if a feed ever sends a malformed date.
         try:
             published_dt = parsedate_to_datetime(raw_pub_date)
         except (TypeError, ValueError):
@@ -851,6 +1192,13 @@ def fetch_news_rss(query, max_items=10):
 
 
 def store_news_items(items, search_query):
+    """
+    Inserts new articles tagged with the search that found them, skipping
+    ones we've already stored (by link). If the same article link was
+    already stored under a DIFFERENT earlier query, this update re-tags
+    it to the current query too - so re-running a search still surfaces
+    it under that search, rather than silently hiding it forever.
+    """
     conn = get_connection()
     cursor = conn.cursor()
     for item in items:
@@ -862,12 +1210,21 @@ def store_news_items(items, search_query):
                  datetime.now().strftime("%Y-%m-%d %H:%M:%S"), search_query),
             )
         except sqlite3.IntegrityError:
+            # Already have this article - just make sure it's tagged
+            # under this query too, so it still shows up here.
             cursor.execute("UPDATE news_items SET search_query = ? WHERE link = ?", (search_query, item["link"]))
     conn.commit()
     conn.close()
 
 
 def fetch_news_for_query(search_query, limit=200):
+    """
+    Fetches articles matching the CURRENT search query only - this is
+    what actually makes different searches show different results,
+    instead of one giant pool of everything ever fetched. Sorted purely
+    by publish date; upvotes are shown as a stat but never affect
+    ordering, so a popular old article can't permanently bury newer ones.
+    """
     conn = get_connection()
     df = pd.read_sql_query(
         """
@@ -927,13 +1284,19 @@ defaults = {
     "_last_picker_raw": None,
     "_last_geo_raw": None,
     "map_center": CHENNAI_COORDS,
+    "splash_done": False,
+    "guest_mode": False,
 }
 for key, value in defaults.items():
     if key not in st.session_state:
         st.session_state[key] = value
 
 # --------------------------------------------------------------------------
-# GOOGLE OAUTH CALLBACK
+# GOOGLE OAUTH CALLBACK - Google redirects back to this same URL with
+# ?code=... after the citizen signs in. We exchange it for their verified
+# email, then either log them straight in (if this Google account has
+# signed in before) or ask them to pick a display username (first time
+# only - never forces the username to be their email address).
 # --------------------------------------------------------------------------
 query_params = st.query_params
 if "code" in query_params and st.session_state.current_user is None:
@@ -963,152 +1326,173 @@ def save_photo(file_bytes, prefix):
 
 
 def safe_str(value, default=""):
+    """
+    Safely reads an optional text column (description, photo_path, etc.).
+    pandas reads a SQL NULL as NaN (a float) rather than None or "" - and
+    since NaN is truthy in Python, a plain `value or default` lets it
+    through unchanged instead of falling back to default. isinstance
+    check avoids that trap everywhere we read one of these columns.
+    """
     return value if isinstance(value, str) else default
 
 
 def safe_image(path, **kwargs):
+    """
+    Shows a photo if its file still exists on disk, or a friendly message
+    if not - instead of a hard crash. This matters specifically on
+    Streamlit Community Cloud: its local filesystem is EPHEMERAL, wiped
+    on every redeploy/sleep-wake cycle, so a photo_path saved earlier can
+    end up pointing at a file that no longer physically exists even
+    though the database row referencing it still does.
+    """
     if isinstance(path, str) and os.path.isfile(path):
         st.image(path, **kwargs)
     else:
-        st.caption("📷 Image preview unavailable.")
+        st.caption("📷 Photo unavailable (may have been cleared on app restart).")
 
-
-# --------------------------------------------------------------------------
-# GROQ AI CONFIG & HELPERS (Smart Multi-Model Fallback)
-# --------------------------------------------------------------------------
-GROQ_VISION_MODELS = [
-    m for m in [
-        os.environ.get("GROQ_VISION_MODEL", "").strip(),
-        "llama-3.2-11b-vision-preview",
-        "llama-3.2-90b-vision-preview",
-        "qwen/qwen3.6-27b",
-        "qwen/qwen3-vl-32b-instruct",
-    ] if m
-]
-
-GROQ_TEXT_MODELS = [
-    m for m in [
-        os.environ.get("GROQ_TEXT_MODEL", "").strip(),
-        "qwen/qwen3.6-27b",
-        "llama-3.3-70b-versatile",
-        "llama-3.1-8b-instant",
-    ] if m
-]
 
 SEVERITY_TO_RATING = {"Mild": 3, "Severe": 2, "Critical": 1}
 
 
 def analyze_road_photo(image_bytes, mime_type="image/jpeg"):
+    """
+    Sends an uploaded photo to Qwen 3.6 27B (an open-weight, Apache-2.0
+    vision-language model, served fast via Groq) to (a) verify it actually
+    shows road damage - not a meme, a selfie, an unrelated object, etc. -
+    and (b) classify severity and category if it does. This is what makes
+    the photo-upload step scam-resistant instead of just trusting any
+    image a citizen attaches. Returns (result_dict, error_message) -
+    exactly one is None. Reuses GROQ_API_KEY (same key already used for
+    complaint wording) - no separate setup needed.
+    """
     try:
         from groq import Groq
     except ImportError:
-        return None, "Install the 'groq' package (pip install groq)."
+        return None, "Install the 'groq' package to enable photo verification (pip install groq)."
 
     api_key = os.environ.get("GROQ_API_KEY")
     if not api_key:
-        return None, "Set the GROQ_API_KEY environment variable."
+        return None, "Set the GROQ_API_KEY environment variable to enable photo verification."
 
     prompt = (
-        "You are verifying a citizen-submitted photo for a civic road-damage platform. "
-        "Filter out memes, jokes, or non-road images. Respond with ONLY a JSON object: "
+        "You are verifying a citizen-submitted photo for a civic road-damage reporting platform, "
+        "to filter out irrelevant, joke, or unrelated images. Look at this photo and respond with "
+        "ONLY a JSON object, no other text, no markdown fences, in exactly this shape: "
         '{"is_road_issue": true or false, '
-        '"category": one of ["Pothole","Waterlogging","Traffic/Cracks"] or null, '
-        '"severity": one of ["Mild","Severe","Critical"] or null, '
-        '"looks_ai_generated": false, '
-        '"explanation": "one concise sentence reason"}.'
+        '"category": one of ["Pothole","Waterlogging","Traffic/Cracks"] or null if is_road_issue is false, '
+        '"severity": one of ["Mild","Severe","Critical"] or null if is_road_issue is false, '
+        '"looks_ai_generated": true or false - your best-effort guess at whether this image is '
+        'AI-generated/synthetic rather than a real photograph (look for telltale artifacts, unnatural '
+        'textures, or impossible details), '
+        '"explanation": a short one-sentence reason for your verdict}.'
     )
 
-    client = Groq(api_key=api_key)
-    base64_image = base64.b64encode(image_bytes).decode("utf-8")
-    image_url = f"data:{mime_type};base64,{base64_image}"
+    try:
+        import base64
 
-    last_error = None
-    for model_name in GROQ_VISION_MODELS:
-        try:
-            response = client.chat.completions.create(
-                model=model_name,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": prompt},
-                            {"type": "image_url", "image_url": {"url": image_url}},
-                        ],
-                    }
-                ],
-                temperature=0.0,
-            )
-
-            raw_text = response.choices[0].message.content.strip()
-            if raw_text.startswith("```"):
-                raw_text = raw_text.strip("`")
-                if raw_text.lower().startswith("json"):
-                    raw_text = raw_text[4:]
-            data = json.loads(raw_text.strip())
-            return data, None
-        except Exception as exc:
-            last_error = exc
-            continue
-
-    return None, f"Vision analysis failed: {last_error}"
+        client = Groq(api_key=api_key)
+        b64_image = base64.b64encode(image_bytes).decode("utf-8")
+        response = client.chat.completions.create(
+            model="qwen/qwen3.6-27b",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:{mime_type};base64,{b64_image}"},
+                        },
+                    ],
+                }
+            ],
+            response_format={"type": "json_object"},
+        )
+        raw_text = response.choices[0].message.content.strip()
+        if raw_text.startswith("```"):
+            raw_text = raw_text.strip("`")
+            if raw_text.lower().startswith("json"):
+                raw_text = raw_text[4:]
+        data = json.loads(raw_text.strip())
+        return data, None
+    except Exception as exc:  # noqa: BLE001 - surface any API/parsing failure to the UI
+        return None, f"Photo analysis failed: {exc}"
 
 
 def polish_complaint_with_ai(details_text, category, rating, location_name):
+    """
+    Optional: sends the plain complaint text to Groq (openai/gpt-oss-120b,
+    an open-weight OpenAI model served fast via Groq) and asks for a more
+    formal, persuasive rewrite suitable for an official government
+    complaint form - still capped at the real 400-char field limit.
+    Returns (polished_text, error_message) - exactly one is None. Fails
+    safely (returns an error message, not an exception) if the 'groq'
+    package or GROQ_API_KEY isn't set up.
+    """
     try:
         from groq import Groq
     except ImportError:
-        return None, "Install the 'groq' package (pip install groq)."
+        return None, "Install the 'groq' package to enable AI-polished complaint wording (pip install groq)."
 
     api_key = os.environ.get("GROQ_API_KEY")
     if not api_key:
-        return None, "Set the GROQ_API_KEY environment variable."
+        return None, "Set the GROQ_API_KEY environment variable to enable AI-polished complaint wording."
 
     prompt = (
-        "Rewrite this citizen road complaint description as a formal, persuasive grievance "
-        "for a municipal portal. Keep GPS coordinates, location names, and core facts. "
-        f"Respond with ONLY the rewritten text under {GCC_DETAILS_MAX_CHARS} characters, no quotation marks.\n\n"
-        f"Category: {category}\nRating: {rating}/5\nLocation: {location_name}\n"
+        "Rewrite this citizen road-complaint description as a formal, persuasive, but factual "
+        "complaint suitable for a government public-grievance portal. Keep every concrete detail "
+        "(location, GPS coordinates, category). Do not invent facts that aren't in the original. "
+        f"Respond with ONLY the rewritten text, under {GCC_DETAILS_MAX_CHARS} characters, no preamble, "
+        "no quotation marks.\n\n"
+        f"Category: {category}\nSeverity rating: {rating}/5\nLocation: {location_name}\n"
         f"Original text: {details_text}"
     )
 
-    client = Groq(api_key=api_key)
-    last_error = None
-    for model_name in GROQ_TEXT_MODELS:
-        try:
-            response = client.chat.completions.create(
-                model=model_name,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.3,
-            )
-            polished = response.choices[0].message.content.strip().strip('"')
-            return polished[:GCC_DETAILS_MAX_CHARS], None
-        except Exception as exc:
-            last_error = exc
-            continue
-
-    return None, f"AI rewrite failed: {last_error}"
+    try:
+        client = Groq(api_key=api_key)
+        # Model name per Groq's own deprecation notice (llama-3.3-70b-versatile
+        # was retired) - update this string again if Groq renames its
+        # recommended open-weight text model in the future.
+        response = client.chat.completions.create(
+            model="openai/gpt-oss-120b",
+            messages=[{"role": "user", "content": prompt}],
+        )
+        polished = response.choices[0].message.content.strip().strip('"')
+        return polished[:GCC_DETAILS_MAX_CHARS], None
+    except Exception as exc:  # noqa: BLE001 - surface any API failure to the UI
+        return None, f"AI rewrite failed: {exc}"
 
 
 def build_civic_complaint(row, municipality_info, is_known_portal):
+    """
+    Builds the fields a citizen would paste into their local municipal
+    complaint portal: the right complaint group/type wording where we
+    actually know it (Chennai/GCC), a generic-but-usable version
+    everywhere else, and a details string trimmed to a safe universal
+    length limit (matches GCC's real 400-char field; most portals are
+    similar or more generous).
+    """
     if is_known_portal and municipality_info.get("categories"):
         info = municipality_info["categories"].get(row["category"], municipality_info["categories"]["Pothole"])
         group, complaint_type = info["group"], info["type"]
     else:
-        group, complaint_type = "Roads & Infrastructure", row["category"]
+        group, complaint_type = "Roads / Infrastructure", row["category"]
 
-    title = f"Road Defect Report - {row['location_name']}"[:80]
-    description = safe_str(row["description"], "Citizen submitted report via RoadPulse.")
-    prefix = f"[{row['category']}] At {row['location_name']} (GPS: {row['lat']:.5f}, {row['lon']:.5f}). "
+    title = f"Road damage - {row['location_name']}"[:80]
+
+    description = safe_str(row["description"], "Reported via the RoadPulse citizen platform.")
+    prefix = f"[{row['category']}] Near {row['location_name']} (GPS: {row['lat']:.5f}, {row['lon']:.5f}). "
     details = (prefix + description)[:GCC_DETAILS_MAX_CHARS]
 
     return {"group": group, "type": complaint_type, "title": title, "details": details}
 
 
 def geocode_location(query):
+    """Free, no-API-key location search via OpenStreetMap's Nominatim."""
     url = "https://nominatim.openstreetmap.org/search?" + urllib.parse.urlencode(
         {"q": query, "format": "json", "limit": 1}
     )
-    request = urllib.request.Request(url, headers={"User-Agent": "RoadPulse-Spidey-Watch/3.0"})
+    request = urllib.request.Request(url, headers={"User-Agent": "RoadPulse-Hackathon-Prototype/1.0"})
     try:
         with urllib.request.urlopen(request, timeout=6) as response:
             data = json.loads(response.read().decode("utf-8"))
@@ -1121,10 +1505,19 @@ def geocode_location(query):
 
 @st.cache_data(ttl=3600)
 def get_location_name(lat, lon):
+    """
+    Auto-derives a human-readable location name straight from the review's
+    actual coordinates via reverse geocoding, instead of trusting a free-
+    text field a citizen typed - which could otherwise be filled with
+    nonsense, offensive, or unrelated text with no connection to the real
+    spot. Falls back to a plain coordinate string if geocoding fails.
+    Cached for an hour (same pattern as the other geocoding calls) since
+    Nominatim asks callers not to hammer it with repeat requests.
+    """
     url = "https://nominatim.openstreetmap.org/reverse?" + urllib.parse.urlencode(
         {"lat": lat, "lon": lon, "format": "json", "zoom": 18, "addressdetails": 0}
     )
-    request = urllib.request.Request(url, headers={"User-Agent": "RoadPulse-Spidey-Watch/3.0"})
+    request = urllib.request.Request(url, headers={"User-Agent": "RoadPulse-Hackathon-Prototype/1.0"})
     try:
         with urllib.request.urlopen(request, timeout=6) as response:
             data = json.loads(response.read().decode("utf-8"))
@@ -1134,6 +1527,11 @@ def get_location_name(lat, lon):
 
 
 def reviews_to_payload(df):
+    """
+    Converts the reviews DataFrame into plain JSON-safe dicts to hand to
+    the Google Maps component (declare_component args must be JSON
+    serializable - a pandas DataFrame is not, so we convert row by row).
+    """
     records = []
     for _, row in df.iterrows():
         records.append({
@@ -1146,106 +1544,75 @@ def reviews_to_payload(df):
             "username": row["username"],
             "upvote_count": int(row["upvote_count"]),
             "description": safe_str(row["description"]),
+            # pandas reads a SQL NULL as NaN (a float), and NaN is truthy in
+            # Python - so a plain `if row["path_coords"]` check let NaN
+            # through to json.loads() and crashed. isinstance(..., str)
+            # only accepts it when there's a real JSON string to parse.
             "path_coords": json.loads(row["path_coords"]) if isinstance(row["path_coords"], str) else None,
         })
     return records
 
 
 # --------------------------------------------------------------------------
-# SIDEBAR
+# SPLASH SCREEN + ACCESS GATE - everything below is unreachable until the
+# boot animation has been dismissed, and (unless the citizen explicitly
+# chooses to browse as a guest) until they're signed in.
+# --------------------------------------------------------------------------
+if not st.session_state.splash_done:
+    render_splash_screen()
+    st.stop()
+
+if st.session_state.current_user is None and not st.session_state.guest_mode:
+    render_auth_page()
+    st.stop()
+
+# --------------------------------------------------------------------------
+# SIDEBAR - PROFILE
 # --------------------------------------------------------------------------
 if st.session_state.current_user is None:
-    st.sidebar.subheader("🕷️ Web-Watch Sign In")
-
-    if st.session_state.get("_oauth_error"):
-        st.sidebar.error(st.session_state._oauth_error)
-        st.session_state._oauth_error = None
-
-    if st.session_state.get("_pending_google_email"):
-        pending_email = st.session_state._pending_google_email
-        st.sidebar.success(f"Authenticated as {pending_email}")
-        chosen_username = st.sidebar.text_input("Pick a Spidey Handle", key="google_username_choice")
-        if st.sidebar.button("Join the Web"):
-            if not chosen_username.strip():
-                st.sidebar.error("Please enter a username.")
-            else:
-                ok, err = create_google_user(chosen_username.strip(), pending_email)
-                if ok:
-                    st.session_state.current_user = chosen_username.strip()
-                    st.session_state._pending_google_email = None
-                    st.rerun()
-                else:
-                    st.sidebar.error(err)
-    else:
-        if GOOGLE_OAUTH_CLIENT_ID:
-            st.sidebar.link_button("🔵 Sign in with Google", build_google_auth_url())
-        else:
-            st.sidebar.caption("Google sign-in optional.")
-
-        with st.sidebar.expander("Local Citizen Account"):
-            login_tab, signup_tab = st.tabs(["Sign In", "Sign Up"])
-
-            with login_tab:
-                login_username = st.text_input("Handle", key="login_username")
-                login_password = st.text_input("Password", type="password", key="login_password")
-                if st.button("Sign In", key="login_btn"):
-                    if verify_user(login_username.strip(), login_password):
-                        st.session_state.current_user = login_username.strip()
-                        st.rerun()
-                    else:
-                        st.error("Invalid credentials.")
-
-            with signup_tab:
-                signup_username = st.text_input("Choose Handle", key="signup_username")
-                signup_password = st.text_input("Password", type="password", key="signup_password")
-                if st.button("Create Account", key="signup_btn"):
-                    if not signup_username.strip() or not signup_password:
-                        st.error("Both fields required.")
-                    else:
-                        ok, err = create_user(signup_username.strip(), signup_password)
-                        if ok:
-                            st.session_state.current_user = signup_username.strip()
-                            st.rerun()
-                        else:
-                            st.error(err)
+    st.sidebar.info("👁️ Browsing as Guest.")
+    if st.sidebar.button("🔐 Sign In / Sign Up"):
+        st.session_state.guest_mode = False
+        st.rerun()
+    st.sidebar.caption("Sign in to submit, upvote, reply, or mark roads fixed.")
 else:
     score = get_civic_score(st.session_state.current_user)
     st.sidebar.markdown(
         f"""
-        <div class="spidey-profile-card">
-            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-                <span style="font-weight:800; font-size:1.05rem;">🕷️ {st.session_state.current_user}</span>
-                <span class="spidey-points-pill">★ {score} pts</span>
-            </div>
-            <div style="font-size:12px; font-weight:600; color:#FF8099;">{civic_badge(score)}</div>
+        <div class="hero-card">
+            🛰️ <b>{st.session_state.current_user}</b><br>
+            🏅 Civic Score: <b>{score}</b> · {civic_badge(score)}
         </div>
         """,
         unsafe_allow_html=True,
     )
-    if st.sidebar.button("Log Out"):
+    if st.sidebar.button("Log out"):
         st.session_state.current_user = None
+        st.session_state.guest_mode = False
         st.rerun()
 
 st.sidebar.markdown("---")
 
 # --------------------------------------------------------------------------
-# SIDEBAR - LOCATION TOOLS
+# SIDEBAR - LOCATION TOOLS (decluttered: one status line always visible,
+# everything else tucked into a collapsed expander)
 # --------------------------------------------------------------------------
-st.sidebar.subheader("📍 Web-Sling Coordinates")
+st.sidebar.header("📍 Location")
 
 if st.session_state.segment_coords:
     points = st.session_state.segment_coords
     centroid_lat = sum(p[0] for p in points) / len(points)
     centroid_lon = sum(p[1] for p in points) / len(points)
-    st.sidebar.success(f"🧵 Segment Locked ({len(points)} pts)")
+    st.sidebar.success(f"🧵 Segment selected ({len(points)} points)")
     st.sidebar.caption(f"📍 {get_location_name(centroid_lat, centroid_lon)}")
 elif st.session_state.clicked_lat is not None:
-    st.sidebar.success("🎯 Pin Locked")
-    st.sidebar.caption(f"📍 {get_location_name(st.session_state.clicked_lat, st.session_state.clicked_lon)}")
+    st.sidebar.success(
+        f"📍 {get_location_name(st.session_state.clicked_lat, st.session_state.clicked_lon)}"
+    )
 else:
-    st.sidebar.caption("Click map or use Spidey radar tools below.")
+    st.sidebar.caption("Nothing selected - click the map, or use a tool below.")
 
-with st.sidebar.expander("🕸️ Spidey Radar & Search"):
+with st.sidebar.expander("🕸️ Web-sling my location / search"):
     geo_result = geo_component(key="geo_button", default=None)
     if geo_result and geo_result != st.session_state._last_geo_raw:
         st.session_state._last_geo_raw = geo_result
@@ -1254,69 +1621,82 @@ with st.sidebar.expander("🕸️ Spidey Radar & Search"):
         st.session_state.segment_coords = None
         st.session_state.map_center = [geo_result["latitude"], geo_result["longitude"]]
 
-    search_query = st.text_input("Find Neighborhood / Street", placeholder="e.g. T Nagar, Chennai")
-    if st.button("🔎 Locate"):
+    search_query = st.text_input("Search for a location", placeholder="e.g. T Nagar, Chennai")
+    if st.button("🔎 Search"):
         if search_query.strip():
             result = geocode_location(search_query.strip())
             if result:
                 st.session_state.clicked_lat, st.session_state.clicked_lon = result
                 st.session_state.segment_coords = None
                 st.session_state.map_center = list(result)
-                st.success(f"Found: {result[0]:.4f}, {result[1]:.4f}")
+                st.success(f"Found: {result[0]:.5f}, {result[1]:.5f}")
             else:
-                st.error("Location not found.")
+                st.error("Couldn't find that location - try being more specific.")
         else:
-            st.warning("Enter a location to search.")
+            st.warning("Type a location to search first.")
 
-    if st.button("Reset Pin"):
+    if st.button("Clear selection"):
         st.session_state.clicked_lat = None
         st.session_state.clicked_lon = None
         st.session_state.segment_coords = None
         st.rerun()
 
-st.sidebar.markdown("---")
-
 # --------------------------------------------------------------------------
 # SIDEBAR - SUBMISSION FORM
 # --------------------------------------------------------------------------
-st.sidebar.subheader("📝 Report Hazard")
+st.sidebar.header("📝 Submit a Road Review")
 
 if st.session_state.current_user is None:
-    st.sidebar.info("Sign in above to sling reports onto the web.")
+    st.sidebar.info("Sign in above to submit a review.")
 else:
-    st.sidebar.caption("📸 AI Vision Damage Verification")
+    # Both a live camera and a file upload are offered - live capture is
+    # the stronger anti-AI-image safeguard (no file picker to upload a
+    # pre-existing/synthetic image from), but not everyone can safely stop
+    # and shoot a photo mid-drive, so upload-from-device stays available
+    # too. The AI "looks_ai_generated" check below is the safety net
+    # for the upload path - a soft signal, not a guarantee either way.
+    st.sidebar.caption("📸 Optional: add a photo, then verify it with AI")
     photo_method = st.sidebar.radio(
-        "Capture Mode", ["📷 Live Cam", "📁 Device File"],
+        "Photo method", ["📷 Take a live photo", "📁 Upload from device"],
         horizontal=True, label_visibility="collapsed", key="review_photo_method",
     )
     if photo_method.startswith("📷"):
-        uploaded_photo = st.sidebar.camera_input("Shoot Road Photo", key="review_photo_camera")
+        uploaded_photo = st.sidebar.camera_input("Take a photo", key="review_photo_camera")
     else:
         uploaded_photo = st.sidebar.file_uploader(
-            "Upload Road Photo", type=["jpg", "jpeg", "png"], key="review_photo_uploader"
+            "Upload a road photo", type=["jpg", "jpeg", "png"], key="review_photo_uploader"
         )
     if uploaded_photo is not None:
-        if st.sidebar.button("🕷️ Scan Photo with AI"):
+        if st.sidebar.button("🔍 Verify & Analyze with AI"):
             photo_bytes = uploaded_photo.getvalue()
             mime_type = uploaded_photo.type or "image/jpeg"
-            with st.spinner("Spidey-sense scanning photo..."):
-                result, ai_error = analyze_road_photo(photo_bytes, mime_type)
+            result, ai_error = analyze_road_photo(photo_bytes, mime_type)
             if ai_error:
                 st.sidebar.warning(ai_error)
             elif not result.get("is_road_issue"):
-                st.sidebar.warning(f"⚠️ False Alarm: {result.get('explanation')}")
+                st.sidebar.warning(
+                    f"⚠️ This doesn't look like road damage: {result.get('explanation', 'no reason given')}. "
+                    "You can still submit, but double-check your photo."
+                )
                 st.session_state.ai_category = None
                 st.session_state.ai_rating = None
                 st.session_state.ai_explanation = None
             else:
+                if result.get("looks_ai_generated"):
+                    st.sidebar.warning(
+                        "🕵️ This photo has some signs of being AI-generated rather than a real "
+                        "photograph - best-effort AI guess, not a certainty, but worth a second look."
+                    )
                 st.session_state.ai_category = result.get("category")
                 st.session_state.ai_rating = SEVERITY_TO_RATING.get(result.get("severity"), 3)
                 st.session_state.ai_explanation = result.get("explanation")
-                st.sidebar.success(f"Verified: {result.get('category')} ({result.get('severity')})")
+                st.sidebar.success(
+                    f"✅ Verified road damage - {result.get('severity')}. Form below is pre-filled."
+                )
             st.session_state.pending_photo_bytes = photo_bytes
 
         if st.session_state.get("ai_explanation"):
-            st.sidebar.caption(f"🤖 AI Verdict: {st.session_state.ai_explanation}")
+            st.sidebar.caption(f"🕷️ AI verdict: {st.session_state.ai_explanation}")
 
     default_category_index = (
         CATEGORIES.index(st.session_state.get("ai_category"))
@@ -1325,10 +1705,11 @@ else:
     default_rating = st.session_state.get("ai_rating") or 3
 
     with st.sidebar.form("review_form", clear_on_submit=True):
+        st.caption("📍 Location is captured automatically from your map selection above - no typing needed.")
         category = st.selectbox("Category", CATEGORIES, index=default_category_index)
-        rating = st.slider("Hazard Level (1 = Dangerous, 5 = Smooth)", 1, 5, default_rating)
-        description = st.text_area("Hazard Details", placeholder="Describe the potholes, cracks, or waterlogging...")
-        submitted = st.form_submit_button("🕸️ Thwip! Submit Report")
+        rating = st.slider("Rating (1 = terrible, 5 = excellent)", 1, 5, default_rating)
+        description = st.text_area("Description", placeholder="Describe the road condition...")
+        submitted = st.form_submit_button("Submit Review")
 
         if submitted:
             has_point = st.session_state.clicked_lat is not None
@@ -1337,10 +1718,10 @@ else:
             in_cooldown = cooldown_elapsed is not None and cooldown_elapsed < SUBMISSION_COOLDOWN_SECONDS
 
             if not has_point and not has_segment:
-                st.error("Please pin or draw a location on the map first.")
+                st.error("Select a point, draw a segment, use your location, or search first.")
             elif in_cooldown:
                 wait_seconds = int(SUBMISSION_COOLDOWN_SECONDS - cooldown_elapsed)
-                st.error(f"⏱️ Slow down web-slinger! Wait {wait_seconds}s before submitting.")
+                st.error(f"⏱️ Slow down, citizen! Please wait {wait_seconds}s before submitting another review.")
             else:
                 if has_segment:
                     points = st.session_state.segment_coords
@@ -1355,9 +1736,17 @@ else:
                 duplicate = find_nearby_duplicate(centroid_lat, centroid_lon, category)
 
                 if duplicate:
-                    st.warning(f"A report for '{category}' already exists nearby at '{duplicate['location_name']}'. Please endorse that one instead!")
+                    st.warning(
+                        f"📍 A similar '{category}' report already exists nearby "
+                        f"(\"{duplicate['location_name']}\"). Please upvote that one in the "
+                        "Community tab instead of creating a duplicate."
+                    )
                 else:
+                    # Location name comes straight from the coordinates, not
+                    # free text - closes off the "type something nonsensical
+                    # as the road name" troll vector entirely.
                     derived_location_name = get_location_name(centroid_lat, centroid_lon)
+
                     pending_bytes = st.session_state.get("pending_photo_bytes")
                     photo_path = save_photo(pending_bytes, "review") if pending_bytes else None
 
@@ -1368,7 +1757,7 @@ else:
                         path_coords=path_json, photo_path=photo_path,
                     )
                     add_civic_points(st.session_state.current_user, 10)
-                    st.success("🕸️ *Thwip!* Hazard added to the neighborhood web! (+10 Civic Score)")
+                    st.success("🕸️ Thwip! Review submitted. (+10 Civic Score)")
 
                     for key in ("clicked_lat", "clicked_lon", "segment_coords", "_last_picker_raw", "_last_geo_raw"):
                         st.session_state[key] = defaults[key]
@@ -1378,54 +1767,51 @@ else:
 
 
 # --------------------------------------------------------------------------
-# MAIN UI
+# MAIN AREA - TABS
 # --------------------------------------------------------------------------
 st.markdown(
     """
-    <div class="hero-header">
-        <div class="spidey-radar-badge">🕷️ SPIDEY-SENSE: ACTIVE & MONITORING</div>
-        <h1 class="hero-title">RoadPulse · Friendly Neighborhood Watch</h1>
-        <p class="hero-subtitle">
-            With great roads comes great responsibility. Spot hazards, verify with AI,
-            and sling grievances directly to your municipal corporation.
-        </p>
+    <div class="hero-banner">
+        <div class="eyebrow">RoadPulse // Civic Grid Terminal</div>
+        <h1>Road Intelligence, Crowdsourced</h1>
+        <p>Scan it, log it, route it to the right office - real-time,
+        citizen-powered road-quality monitoring for your city.</p>
+        <div class="pulse-badge">GRID: ACTIVE</div>
     </div>
     """,
     unsafe_allow_html=True,
 )
 
 if not GOOGLE_MAPS_API_KEY:
-    st.warning("Google Maps API key not detected. Set GOOGLE_MAPS_API_KEY in environment.")
+    st.warning(
+        "No Google Maps API key found. Set the GOOGLE_MAPS_API_KEY environment variable and restart "
+        "to see the map (both the picker and heatmap views). (See the setup instructions at the top of roadpulse_app.py.)"
+    )
 
-tab_map, tab_reviews, tab_news = st.tabs(["🗺️ Neighborhood Radar", "💬 Community Web", "📰 The Daily Bugle"])
+tab_map, tab_reviews, tab_news = st.tabs(["🗺️ Map", "💬 Community", "📡 Signal Feed"])
 
-# ----- TAB 1: MAP -------
+# ----- TAB 1: MAP (interactive picker + heatmap, toggle between them) -------
 with tab_map:
     reviews_df = fetch_all_reviews()
 
-    col_view, col_blank = st.columns([2, 4])
-    with col_view:
-        view_choice = st.segmented_control(
-            "Radar View",
-            ["📍 Live Explorer", "🔥 Hazard Heatmap"],
-            default="📍 Live Explorer",
-            label_visibility="collapsed"
-        )
-    is_heatmap_view = "Heatmap" in str(view_choice)
+    view_choice = st.radio(
+        "View", ["📍 Map (click / draw to report)", "🔥 Heatmap (fixed vs. unfixed)"],
+        horizontal=True, label_visibility="collapsed",
+    )
+    is_heatmap_view = view_choice.startswith("🔥")
 
-    col_map, col_stats = st.columns([3.2, 1])
+    col_map, col_stats = st.columns([3, 1])
 
     with col_stats:
-        st.metric("Total Hazards Trapped", len(reviews_df))
+        st.metric("Total Reviews", len(reviews_df))
         if not reviews_df.empty:
-            st.metric("Mean Road Quality", f"{reviews_df['rating'].mean():.1f} ⭐")
+            st.metric("Average Rating", f"{reviews_df['rating'].mean():.1f} ⭐")
             open_severe = ((reviews_df["rating"] <= 2) & (reviews_df["status"] == "Open")).sum()
-            st.metric("Severe Open Hazards", int(open_severe))
-
+            st.metric("Open Bad Roads (≤2★)", int(open_severe))
         if is_heatmap_view:
-            st.caption("🔴 Red = Critical Unfixed &nbsp;|&nbsp; 🟢 Green = Fixed")
+            st.caption("🔴 Red = still open/unfixed &nbsp; 🟢 Green = fixed.")
         else:
-            st.caption("Use the ✏️ Draw Segment tool on top-right of the map to trace road spans.")
+            st.caption("Use the ✏️ Draw Segment button (top-right of the map) to draw a road segment.")
 
     with col_map:
         if GOOGLE_MAPS_API_KEY:
@@ -1465,158 +1851,217 @@ with tab_map:
                         st.session_state.clicked_lat = None
                         st.session_state.clicked_lon = None
         else:
-            st.info("Map awaiting Google Maps API key credentials.")
+            st.info("Map unavailable - add a Google Maps API key (see the warning above).")
 
-# ----- TAB 2: COMMUNITY -------
+    if not is_heatmap_view:
+        st.markdown(
+            "**Legend:** 🔴 Red = 1-2★ (Severe) &nbsp;&nbsp; 🟠 Orange = 3★ (Moderate) "
+            "&nbsp;&nbsp; 🟢 Green = 4-5★ (Good, incl. Fixed)"
+        )
+
+# ----- TAB 2: COMMUNITY (all reviews, upvotes, replies, fixes) -------------
 with tab_reviews:
-    st.subheader("💬 Community Web Feed")
-    st.caption("All reported road defects, photo evidence, civic endorsements, and repair confirmations.")
+    st.subheader("💬 Community")
+    st.caption("Every review, with photos, an upvote button, an SLA clock, and a reply thread.")
 
     all_reviews = fetch_all_reviews()
 
     if all_reviews.empty:
-        st.info("No hazards on the web yet. Pin a road in the sidebar to report one!")
+        st.info("No reviews yet - sign in and submit one from the sidebar!")
     else:
         for _, row in all_reviews.iterrows():
             review_id = int(row["id"])
-            is_segment = isinstance(row["path_coords"], str)
-            loc_icon = "🧵 Corridor" if is_segment else "📍 Spot"
-            status_html = '<span class="spidey-pill spidey-pill-fixed">🟢 FIXED</span>' if row["status"] == "Fixed" else '<span class="spidey-pill spidey-pill-open">🔴 OPEN</span>'
-            stars = "⭐" * int(row["rating"])
+            is_segment = isinstance(row["path_coords"], str)  # see note in reviews_to_payload re: NaN truthiness
+            location_kind = "🧵" if is_segment else "📍"
+            status_pill = "🟢 FIXED" if row["status"] == "Fixed" else "🔴 OPEN"
             ticket_id = f"RP-{review_id:04d}"
 
-            with st.expander(f"{ticket_id} · {loc_icon} {row['location_name']} · {stars}"):
-                st.markdown(
-                    f"<div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;'>"
-                    f"<span><b>Category:</b> {row['category']} · <b>Reported by:</b> 🕷️ {row['username']}</span>"
-                    f"{status_html}"
-                    f"</div>",
-                    unsafe_allow_html=True
-                )
+            with st.expander(
+                f"{ticket_id} · {location_kind} {row['location_name']} · {'⭐' * int(row['rating'])} · {status_pill}"
+            ):
+                st.caption(f"{row['category']} · reported by **{row['username']}**")
                 st.write(safe_str(row["description"], "_No description provided._"))
 
                 if row["status"] == "Open" and int(row["rating"]) <= 2:
                     reported_dt = datetime.strptime(row["timestamp"], "%Y-%m-%d %H:%M:%S")
                     days_elapsed = (datetime.now() - reported_dt).days
                     if days_elapsed > SLA_DAYS:
-                        st.error(f"⛔ SLA Breached! Reported {days_elapsed} days ago (Exceeds {SLA_DAYS}-day repair clock).")
+                        st.error(f"⛔ SLA breached - reported {days_elapsed} days ago (30-day public repair limit)")
                     else:
-                        st.info(f"⏳ Repair SLA Clock: {SLA_DAYS - days_elapsed} day(s) remaining for municipal resolution.")
+                        st.info(f"⏳ {SLA_DAYS - days_elapsed} day(s) remaining under the 30-day repair SLA")
 
-                # Municipal Grievance Routing
+                # --- File with the citizen's actual local municipal office ---
                 if row["status"] == "Open":
-                    with st.expander("📋 Sling this Grievance to Municipal Public Works"):
+                    with st.expander("📋 File this with your local municipal office"):
                         municipality_info, is_known_portal = get_municipality_info(row)
-                        st.markdown(f"**Target Jurisdiction:** `{municipality_info['name']}`")
+                        st.write(f"**Reporting to:** {municipality_info['name']}")
+
+                        if is_known_portal:
+                            st.caption(
+                                "This is a real public complaints system. It requires your own mobile "
+                                "number + OTP to submit, so we can't file this for you - but everything "
+                                "below is pre-formatted to paste straight in."
+                            )
+                        else:
+                            st.caption(
+                                "We don't have this municipality's exact portal on file yet, so here's a "
+                                "search link to find it, plus a generic complaint you can adapt to whatever "
+                                "form it uses."
+                            )
+
                         civic = build_civic_complaint(row, municipality_info, is_known_portal)
+                        st.write(f"**Complaint Category:** {civic['group']}")
+                        st.write(f"**Complaint Type:** {civic['type']}")
+                        st.write("**Complaint Title:**")
+                        st.code(civic["title"], language=None)
 
-                        col_g1, col_g2 = st.columns(2)
-                        with col_g1:
-                            st.caption("Complaint Category")
-                            st.code(civic["group"], language=None)
-                        with col_g2:
-                            st.caption("Complaint Type")
-                            st.code(civic["type"], language=None)
-
+                        # An AI-polished version is optional and session-only - we
+                        # never overwrite the DB, just what's displayed here.
                         polish_key = f"ai_polished_{review_id}"
-                        if st.button("✨ Polish Grievance with AI", key=f"ai_polish_btn_{review_id}"):
-                            with st.spinner("Crafting formal complaint wording..."):
-                                polished, ai_error = polish_complaint_with_ai(
-                                    civic["details"], row["category"], int(row["rating"]), row["location_name"]
-                                )
+                        if st.button("✨ Improve wording with AI", key=f"ai_polish_btn_{review_id}"):
+                            polished, ai_error = polish_complaint_with_ai(
+                                civic["details"], row["category"], int(row["rating"]), row["location_name"]
+                            )
                             if ai_error:
                                 st.warning(ai_error)
                             else:
                                 st.session_state[polish_key] = polished
 
                         details_to_show = st.session_state.get(polish_key, civic["details"])
-                        st.caption(f"Complaint Description ({len(details_to_show)}/{GCC_DETAILS_MAX_CHARS} chars):")
+                        st.write(f"**Details of Complaint** ({len(details_to_show)}/{GCC_DETAILS_MAX_CHARS} chars):")
                         st.code(details_to_show, language=None)
+                        if polish_key in st.session_state:
+                            st.caption("✨ AI-polished wording shown above. This isn't saved - re-generate anytime.")
 
                         if row["photo_path"] and isinstance(row["photo_path"], str):
-                            safe_image(row["photo_path"], width=240, caption="Evidence Photo")
+                            st.caption("📎 Attach the photo below when you upload it on the portal:")
+                            safe_image(row["photo_path"], width=200)
 
-                        btn_title = "Open Official Portal ↗" if is_known_portal else "Search Regional Portal ↗"
-                        st.link_button(btn_title, municipality_info["url"])
+                        button_label = "Open Complaint Portal ↗" if is_known_portal else "Search for Local Portal ↗"
+                        st.link_button(button_label, municipality_info["url"])
 
                 col_up, _ = st.columns([1, 5])
                 with col_up:
                     if st.session_state.current_user is None:
-                        st.caption(f"👍 {row['upvote_count']} endorsements")
+                        st.caption(f"👍 {row['upvote_count']} · sign in to upvote")
                     elif has_upvoted(review_id, st.session_state.current_user):
-                        st.caption(f"✅ Endorsed ({row['upvote_count']})")
+                        st.caption(f"✅ {row['upvote_count']} · you upvoted this")
                     else:
-                        if st.button(f"👍 Endorse ({row['upvote_count']})", key=f"rev_upvote_{review_id}"):
+                        if st.button(f"👍 {row['upvote_count']}", key=f"rev_upvote_{review_id}"):
                             if upvote_review(review_id, st.session_state.current_user):
                                 add_civic_points(st.session_state.current_user, 1)
                             st.rerun()
 
                 if row["status"] == "Open":
                     st.markdown("---")
-                    st.markdown("##### 🛠️ Confirm Fixed (Upload After-Repair Proof)")
+                    st.markdown("**🛠️ Mark as Fixed**")
                     if isinstance(row["photo_path"], str):
-                        safe_image(row["photo_path"], caption="Before Repair", width=220)
-                    if st.session_state.current_user:
-                        fixed_photo = st.file_uploader(
-                            "Upload After-Repair Verification Photo", type=["jpg", "jpeg", "png"],
-                            key=f"fixed_photo_upload_{review_id}",
+                        safe_image(row["photo_path"], caption="Reported photo", width=250)
+                    if st.session_state.current_user is None:
+                        st.caption("Sign in to mark this road as fixed.")
+                    else:
+                        fixed_photo_method = st.radio(
+                            "After-photo method", ["📷 Take a live photo", "📁 Upload from device"],
+                            horizontal=True, label_visibility="collapsed", key=f"fixed_photo_method_{review_id}",
                         )
-                        new_rating = st.slider("New Road Quality Rating", 1, 5, 5, key=f"fixed_rating_{review_id}")
-                        if st.button("✅ Confirm Fixed & Earn +15 pts", key=f"confirm_fixed_{review_id}"):
+                        if fixed_photo_method.startswith("📷"):
+                            fixed_photo = st.camera_input(
+                                "Take an after-repair photo (optional)", key=f"fixed_photo_camera_{review_id}",
+                            )
+                        else:
+                            fixed_photo = st.file_uploader(
+                                "Upload an after-repair photo (optional)", type=["jpg", "jpeg", "png"],
+                                key=f"fixed_photo_upload_{review_id}",
+                            )
+                        new_rating = st.slider("New rating after fix", 1, 5, 5, key=f"fixed_rating_{review_id}")
+                        if st.button("✅ Confirm Fixed", key=f"confirm_fixed_{review_id}"):
                             fixed_path = save_photo(fixed_photo.getvalue(), f"fixed_{review_id}") if fixed_photo else None
                             mark_review_fixed(review_id, new_rating, fixed_path)
                             add_civic_points(st.session_state.current_user, 15)
                             st.rerun()
                 else:
-                    col_b, col_a = st.columns(2)
-                    with col_b:
+                    st.success("✅ This road has been marked FIXED by the community.")
+                    col_before, col_after = st.columns(2)
+                    with col_before:
                         if isinstance(row["photo_path"], str):
                             safe_image(row["photo_path"], caption="Before")
-                    with col_a:
+                    with col_after:
                         if isinstance(row["fixed_photo_path"], str):
-                            safe_image(row["fixed_photo_path"], caption="After Repair (Fixed)")
+                            safe_image(row["fixed_photo_path"], caption="After")
 
                 st.markdown("---")
-                st.markdown("##### 💬 Spider-Chat & Notes")
+                st.markdown("**Replies:**")
                 replies = fetch_replies(review_id)
                 if replies.empty:
-                    st.caption("No replies yet on this hazard.")
+                    st.caption("No replies yet - be the first to respond.")
                 else:
                     for _, reply in replies.iterrows():
-                        st.markdown(f"**🕷️ {reply['username']}**: {reply['reply_text']}")
+                        st.markdown(f"**{reply['username']}:** {reply['reply_text']}")
                         st.caption(reply["timestamp"])
 
-                if st.session_state.current_user:
+                if st.session_state.current_user is None:
+                    st.caption("Sign in to reply.")
+                else:
                     with st.form(f"reply_form_{review_id}", clear_on_submit=True):
-                        reply_text = st.text_input("Add a comment / update", key=f"reply_input_{review_id}")
-                        if st.form_submit_button("Post Reply (+2 pts)"):
+                        reply_text = st.text_input("Add a reply", key=f"reply_input_{review_id}")
+                        reply_submitted = st.form_submit_button("Post Reply")
+                        if reply_submitted:
                             if reply_text.strip():
                                 insert_reply(review_id, st.session_state.current_user, reply_text.strip())
                                 add_civic_points(st.session_state.current_user, 2)
                                 st.rerun()
+                            else:
+                                st.warning("Reply can't be empty.")
 
-# ----- TAB 3: THE DAILY BUGLE -------
+# ----- TAB 3: SIGNAL FEED (community news feed) ----------------------------
 with tab_news:
     st.markdown(
         """
+        <style>
+        .bugle-masthead {
+            border-top: 1px solid var(--glass-border); border-bottom: 1px solid var(--glass-border);
+            background: rgba(0,240,255,0.04);
+            padding: 14px 0; margin-bottom: 14px; text-align: center;
+            border-radius: 14px;
+        }
+        .bugle-masthead h1 {
+            font-family: 'Orbitron', sans-serif !important;
+            font-size: 2.1rem !important; letter-spacing: 3px;
+            background: linear-gradient(90deg, var(--neon-cyan), var(--neon-magenta));
+            -webkit-background-clip: text; background-clip: text; color: transparent !important;
+            text-shadow: none !important;
+            margin: 0 !important;
+        }
+        .bugle-masthead .subhead {
+            font-family: 'Share Tech Mono', monospace; color: #7fa8c9;
+            font-size: 12px; letter-spacing: 2px; text-transform: uppercase;
+        }
+        .bugle-article b { font-family: 'Rajdhani', sans-serif; font-weight: 700; font-size: 1.05rem; color: #eafcff; }
+        </style>
         <div class="bugle-masthead">
-            <div class="bugle-tagline">SERVING THE NEIGHBORHOOD SINCE DAY ONE</div>
-            <h1 class="bugle-title">THE DAILY BUGLE</h1>
-            <div class="bugle-tagline">REAL NEWS. REAL ROADS. REAL CITIZENS.</div>
+            <div class="subhead">Live intercepts // infrastructure chatter</div>
+            <h1>SIGNAL FEED</h1>
+            <div class="subhead">Real news. Real roads. Real citizens.</div>
         </div>
         """,
         unsafe_allow_html=True,
     )
+    st.caption(
+        "Real news coverage of road/infrastructure problems, pulled from Google News. "
+        "Sorted newest first - upvotes show community trust, but never bump an article out of order."
+    )
 
-    news_query = st.text_input("Topic Search", value="Chennai road repair OR pothole", key="news_search_query")
-    if st.button("🔄 Fetch Latest Bugle Headlines"):
+    news_query = st.text_input(
+        "Search topic", value="Chennai road damage OR pothole", key="news_search_query"
+    )
+    if st.button("🔄 Fetch Latest Headlines"):
         fetched = fetch_news_rss(news_query.strip())
         if fetched:
             store_news_items(fetched, news_query.strip())
-            st.session_state.news_page = 1
+            st.session_state.news_page = 1  # jump back to page 1 on a fresh fetch
             st.success(f"Fetched {len(fetched)} articles.")
         else:
-            st.warning("No articles found for this topic.")
+            st.warning("No articles found, or the request failed - try a different search topic.")
         st.rerun()
 
     if "news_page" not in st.session_state:
@@ -1624,14 +2069,17 @@ with tab_news:
     if "_last_shown_news_query" not in st.session_state:
         st.session_state._last_shown_news_query = None
     if st.session_state._last_shown_news_query != news_query.strip():
+        # The search box changed since the last render - reset to page 1
+        # rather than potentially landing on an out-of-range page for a
+        # topic with fewer results than the last one.
         st.session_state.news_page = 1
         st.session_state._last_shown_news_query = news_query.strip()
 
-    PAGE_SIZE = 8
+    PAGE_SIZE = 10
     all_news = fetch_news_for_query(news_query.strip())
 
     if all_news.empty:
-        st.info("No Bugle dispatches on record. Click 'Fetch Latest Bugle Headlines' above!")
+        st.info("No headlines for this topic yet - click 'Fetch Latest Headlines' above to pull some in.")
     else:
         total_pages = max(1, (len(all_news) + PAGE_SIZE - 1) // PAGE_SIZE)
         st.session_state.news_page = min(st.session_state.news_page, total_pages)
@@ -1642,36 +2090,32 @@ with tab_news:
 
         for _, item in page_items.iterrows():
             news_id = int(item["id"])
-            st.markdown(
-                f"""
-                <div class="news-card">
-                    <div class="news-title">{item["title"]}</div>
-                    <div class="news-meta">Source: <b>{item["source"]}</b> · {item["published"]}</div>
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
-            col_link, col_vote = st.columns([4, 1])
-            with col_link:
-                st.link_button("Read Article ↗", item["link"])
-            with col_vote:
+            with st.container(border=True):
+                st.markdown(f'<div class="bugle-article"><b>{item["title"]}</b></div>', unsafe_allow_html=True)
+                st.caption(f"{item['source']} · {item['published']}")
+                st.link_button("Read article ↗", item["link"])
+
                 if st.session_state.current_user is None:
-                    st.caption(f"👍 {item['upvote_count']}")
+                    st.caption(f"👍 {item['upvote_count']} · sign in to upvote")
                 elif has_upvoted_news(news_id, st.session_state.current_user):
-                    st.caption(f"✅ Endorsed ({item['upvote_count']})")
+                    st.caption(f"✅ {item['upvote_count']} · you upvoted this")
                 else:
-                    if st.button(f"👍 Endorse ({item['upvote_count']})", key=f"news_upvote_{news_id}"):
+                    if st.button(f"👍 {item['upvote_count']}", key=f"news_upvote_{news_id}"):
                         if upvote_news(news_id, st.session_state.current_user):
                             add_civic_points(st.session_state.current_user, 1)
                         st.rerun()
 
         col_prev, col_info, col_next = st.columns([1, 2, 1])
         with col_prev:
-            if st.button("⬅ Previous", disabled=(page <= 1)):
+            if st.button("⬅ Prev", disabled=(page <= 1)):
                 st.session_state.news_page -= 1
                 st.rerun()
         with col_info:
-            st.markdown(f"<div style='text-align:center; padding-top:6px;'>Page {page} of {total_pages} ({len(all_news)} articles)</div>", unsafe_allow_html=True)
+            st.markdown(
+                f"<div style='text-align:center; padding-top:6px;'>Page {page} of {total_pages} "
+                f"({len(all_news)} articles)</div>",
+                unsafe_allow_html=True,
+            )
         with col_next:
             if st.button("Next ➡", disabled=(page >= total_pages)):
                 st.session_state.news_page += 1
