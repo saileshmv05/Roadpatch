@@ -1104,7 +1104,6 @@ defaults = {
     "_last_picker_raw": None,
     "_last_geo_raw": None,
     "map_center": CHENNAI_COORDS,
-    "map_key_version": 0,
 }
 for key, value in defaults.items():
     if key not in st.session_state:
@@ -1679,7 +1678,6 @@ elif nav_page == "Map":
                 st.session_state.clicked_lon = geo_result["longitude"]
                 st.session_state.segment_coords = None
                 st.session_state.map_center = [geo_result["latitude"], geo_result["longitude"]]
-                st.session_state.map_key_version += 1
     
             search_query = st.text_input("Find Neighborhood / Street", placeholder="e.g. T Nagar, Chennai")
             if st.button("🔎 Locate"):
@@ -1689,7 +1687,6 @@ elif nav_page == "Map":
                         st.session_state.clicked_lat, st.session_state.clicked_lon = result
                         st.session_state.segment_coords = None
                         st.session_state.map_center = list(result)
-                        st.session_state.map_key_version += 1
                         st.success(f"Found: {result[0]:.4f}, {result[1]:.4f}")
                     else:
                         st.error(f"Location not found. {err or ''}".strip())
@@ -1824,7 +1821,7 @@ elif nav_page == "Map":
                     reviews=reviews_to_payload(reviews_df),
                     enable_picker=True,
                     show_heatmap=False,
-                    key=f"road_map_{st.session_state.map_key_version}",
+                    key="road_map",
                     default=None,
                 )
 
