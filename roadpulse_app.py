@@ -1099,6 +1099,7 @@ defaults = {
     "_last_picker_raw": None,
     "_last_geo_raw": None,
     "map_center": CHENNAI_COORDS,
+    "map_key_version": 0,
 }
 for key, value in defaults.items():
     if key not in st.session_state:
@@ -1280,15 +1281,26 @@ def geocode_location(query):
     url = "https://nominatim.openstreetmap.org/search?" + urllib.parse.urlencode(
         {"q": query, "format": "json", "limit": 1}
     )
-    request = urllib.request.Request(url, headers={"User-Agent": "RoadPulse-Spidey-Watch/3.0"})
+    # Nominatim's usage policy requires a real identifying User-Agent (contact info
+    # included). Replace the email below with a real one for your deployed app --
+    # a generic/missing contact is one of the most common reasons Nominatim starts
+    # silently 403-ing requests from shared hosts like Streamlit Community Cloud.
+    request = urllib.request.Request(
+        url,
+        headers={"User-Agent": "RoadPulse-Spidey-Watch/3.0 (contact: youremail@example.com)"},
+    )
     try:
         with urllib.request.urlopen(request, timeout=6) as response:
             data = json.loads(response.read().decode("utf-8"))
-    except (urllib.error.URLError, TimeoutError, ValueError):
-        return None
+    except urllib.error.HTTPError as e:
+        return None, f"Search server returned HTTP {e.code} (likely rate-limited/blocked)."
+    except (urllib.error.URLError, TimeoutError) as e:
+        return None, f"Couldn't reach the search server: {e}"
+    except ValueError as e:
+        return None, f"Bad response from search server: {e}"
     if not data:
-        return None
-    return float(data[0]["lat"]), float(data[0]["lon"])
+        return None, "No results for that place name."
+    return (float(data[0]["lat"]), float(data[0]["lon"])), None
 
 
 @st.cache_data(ttl=3600)
@@ -1658,18 +1670,20 @@ elif nav_page == "Map":
                 st.session_state.clicked_lon = geo_result["longitude"]
                 st.session_state.segment_coords = None
                 st.session_state.map_center = [geo_result["latitude"], geo_result["longitude"]]
+                st.session_state.map_key_version += 1
     
             search_query = st.text_input("Find Neighborhood / Street", placeholder="e.g. T Nagar, Chennai")
             if st.button("🔎 Locate"):
                 if search_query.strip():
-                    result = geocode_location(search_query.strip())
+                    result, err = geocode_location(search_query.strip())
                     if result:
                         st.session_state.clicked_lat, st.session_state.clicked_lon = result
                         st.session_state.segment_coords = None
                         st.session_state.map_center = list(result)
+                        st.session_state.map_key_version += 1
                         st.success(f"Found: {result[0]:.4f}, {result[1]:.4f}")
                     else:
-                        st.error("Location not found.")
+                        st.error(f"Location not found. {err or ''}".strip())
                 else:
                     st.warning("Enter a location to search.")
     
@@ -1801,7 +1815,7 @@ elif nav_page == "Map":
                     reviews=reviews_to_payload(reviews_df),
                     enable_picker=True,
                     show_heatmap=False,
-                    key="road_map",
+                    key=f"road_map_{st.session_state.map_key_version}",
                     default=None,
                 )
 
