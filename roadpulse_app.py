@@ -109,11 +109,6 @@ def get_municipality_info(row):
 
 
 GOOGLE_MAPS_API_KEY = os.environ.get("GOOGLE_MAPS_API_KEY", "")
-# Server-side calls (this Python process) send no HTTP Referer header, so a key
-# restricted to "HTTP referrers" for the browser map will be REQUEST_DENIED here
-# even with Geocoding API enabled. Set a second, unrestricted/IP-restricted key
-# via GOOGLE_GEOCODING_API_KEY for geocode_location / get_location_name to use.
-GOOGLE_GEOCODING_API_KEY = os.environ.get("GOOGLE_GEOCODING_API_KEY", GOOGLE_MAPS_API_KEY)
 GOOGLE_OAUTH_CLIENT_ID = os.environ.get("GOOGLE_OAUTH_CLIENT_ID", "")
 GOOGLE_OAUTH_CLIENT_SECRET = os.environ.get("GOOGLE_OAUTH_CLIENT_SECRET", "")
 GOOGLE_OAUTH_REDIRECT_URI = os.environ.get("GOOGLE_OAUTH_REDIRECT_URI", "http://localhost:8501")
@@ -236,7 +231,12 @@ st.markdown(
 
     /* Spidey Profile Card */
     .spidey-profile-card {
-        display: none;
+        background: linear-gradient(135deg, rgba(38, 14, 28, 0.75) 0%, rgba(13, 22, 45, 0.85) 100%);
+        border: 1px solid rgba(255, 42, 84, 0.35);
+        border-radius: 16px;
+        padding: 16px 18px;
+        margin-bottom: 14px;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35), 0 0 16px rgba(255, 42, 84, 0.15);
     }
     .spidey-points-pill {
         display: inline-block;
@@ -445,8 +445,23 @@ st.markdown(
     /* TOP-RIGHT FLOATING CIVIC SCORE BADGE                               */
     /* ---------------------------------------------------------------- */
     .ig-top-score {
-        display: none;
+        position: fixed;
+        top: 18px;
+        right: 34px;
+        z-index: 999999;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        background: linear-gradient(135deg, rgba(255, 42, 84, 0.22) 0%, rgba(0, 210, 255, 0.18) 100%);
+        border: 1px solid rgba(255, 255, 255, 0.25);
+        backdrop-filter: blur(16px);
+        padding: 8px 18px;
+        border-radius: 9999px;
+        box-shadow: 0 8px 24px rgba(0,0,0,0.4), 0 0 16px rgba(255, 42, 84, 0.2);
     }
+    .ig-top-score .star { color: #FFD166; font-size: 15px; }
+    .ig-top-score .num { font-weight: 900; font-size: 15px; color: #FFFFFF; }
+    .ig-top-score .lbl { font-size: 10px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: #CBD5E1; }
 
     /* ---------------------------------------------------------------- */
     /* NEWS TICKER BAR                                                    */
@@ -1282,50 +1297,32 @@ def build_civic_complaint(row, municipality_info, is_known_portal):
 
 
 def geocode_location(query):
-    if not GOOGLE_GEOCODING_API_KEY:
-        return None, "No Google Maps API key configured (set GOOGLE_MAPS_API_KEY or GOOGLE_GEOCODING_API_KEY)."
-    url = "https://maps.googleapis.com/maps/api/geocode/json?" + urllib.parse.urlencode(
-        {"address": query, "key": GOOGLE_GEOCODING_API_KEY}
+    url = "https://nominatim.openstreetmap.org/search?" + urllib.parse.urlencode(
+        {"q": query, "format": "json", "limit": 1}
     )
+    request = urllib.request.Request(url, headers={"User-Agent": "RoadPulse-Spidey-Watch/3.0"})
     try:
-        with urllib.request.urlopen(url, timeout=6) as response:
+        with urllib.request.urlopen(request, timeout=6) as response:
             data = json.loads(response.read().decode("utf-8"))
-    except (urllib.error.URLError, TimeoutError) as e:
-        return None, f"Couldn't reach the search server: {e}"
-    except ValueError as e:
-        return None, f"Bad response from search server: {e}"
-
-    status = data.get("status")
-    if status == "OK" and data.get("results"):
-        loc = data["results"][0]["geometry"]["location"]
-        return (loc["lat"], loc["lng"]), None
-    if status == "ZERO_RESULTS":
-        return None, "No results for that place name."
-    # Surface Google's own error_message (the real cause: bad key, no
-    # billing, wrong API enabled, referrer restriction, etc.) instead of
-    # guessing -- plus which key source is actually in play, so we can
-    # tell whether GOOGLE_GEOCODING_API_KEY was really picked up or it's
-    # silently falling back to GOOGLE_MAPS_API_KEY.
-    detail = data.get("error_message", "")
-    key_source = "GOOGLE_GEOCODING_API_KEY" if os.environ.get("GOOGLE_GEOCODING_API_KEY") else "GOOGLE_MAPS_API_KEY (fallback)"
-    return None, f"Geocoding failed: {status}{' — ' + detail if detail else ''} [key source: {key_source}]"
+    except (urllib.error.URLError, TimeoutError, ValueError):
+        return None
+    if not data:
+        return None
+    return float(data[0]["lat"]), float(data[0]["lon"])
 
 
 @st.cache_data(ttl=3600)
 def get_location_name(lat, lon):
-    if not GOOGLE_GEOCODING_API_KEY:
-        return f"Near {lat:.5f}, {lon:.5f}"
-    url = "https://maps.googleapis.com/maps/api/geocode/json?" + urllib.parse.urlencode(
-        {"latlng": f"{lat},{lon}", "key": GOOGLE_GEOCODING_API_KEY}
+    url = "https://nominatim.openstreetmap.org/reverse?" + urllib.parse.urlencode(
+        {"lat": lat, "lon": lon, "format": "json", "zoom": 18, "addressdetails": 0}
     )
+    request = urllib.request.Request(url, headers={"User-Agent": "RoadPulse-Spidey-Watch/3.0"})
     try:
-        with urllib.request.urlopen(url, timeout=6) as response:
+        with urllib.request.urlopen(request, timeout=6) as response:
             data = json.loads(response.read().decode("utf-8"))
     except (urllib.error.URLError, TimeoutError, ValueError):
         return f"Near {lat:.5f}, {lon:.5f}"
-    if data.get("status") == "OK" and data.get("results"):
-        return data["results"][0].get("formatted_address") or f"Near {lat:.5f}, {lon:.5f}"
-    return f"Near {lat:.5f}, {lon:.5f}"
+    return data.get("display_name") or f"Near {lat:.5f}, {lon:.5f}"
 
 
 def reviews_to_payload(df):
@@ -1349,183 +1346,6 @@ def reviews_to_payload(df):
 # --------------------------------------------------------------------------
 # SIDEBAR - INSTAGRAM-STYLE LEFT NAVIGATION
 # --------------------------------------------------------------------------
-
-# If user not logged in, show auth page instead of main app
-if st.session_state.current_user is None:
-    st.markdown(
-        """
-        <style>
-        section[data-testid="stSidebar"] { display: none; }
-        
-        /* Full page auth background */
-        .stApp {
-            background: 
-                radial-gradient(ellipse 60% 40% at 50% -10%, rgba(255, 42, 84, 0.2) 0%, transparent 60%),
-                radial-gradient(circle at 10% 30%, rgba(0, 210, 255, 0.1) 0%, transparent 45%),
-                linear-gradient(135deg, #070A12 0%, #0a1420 100%) !important;
-        }
-        
-        /* Container wrapper - proper centering */
-        div[data-testid="stAppViewContainer"] {
-            display: flex !important;
-            align-items: center !important;
-            justify-content: center !important;
-            min-height: 100vh !important;
-        }
-        
-        /* Main element - center content */
-        .main {
-            display: flex !important;
-            align-items: center !important;
-            justify-content: center !important;
-            width: 100% !important;
-            max-width: 100% !important;
-        }
-        
-        /* Centered wrapper */
-        .center-wrapper {
-            width: 100%;
-            max-width: 480px;
-            text-align: center;
-        }
-        
-        /* Auth box styling */
-        .auth-box {
-            background: linear-gradient(135deg, rgba(28, 14, 28, 0.6) 0%, rgba(11, 18, 38, 0.6) 100%);
-            border: 1px solid rgba(255, 42, 84, 0.3);
-            border-radius: 24px;
-            padding: 44px 36px;
-            backdrop-filter: blur(20px);
-            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5), 0 0 40px rgba(255, 42, 84, 0.15);
-            margin-bottom: 28px;
-        }
-        
-        .auth-logo {
-            font-size: 3rem;
-            margin-bottom: 12px;
-            display: block;
-        }
-        
-        .auth-title {
-            font-size: 2.4rem;
-            font-weight: 900;
-            background: linear-gradient(135deg, #FFFFFF 20%, #FF2A54 50%, #00D2FF 100%);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            margin: 0 0 8px 0;
-        }
-        
-        .auth-subtitle {
-            font-size: 0.95rem;
-            color: #CBD5E1;
-            margin: 0;
-            line-height: 1.5;
-        }
-        
-        /* Form wrapper */
-        .form-wrapper {
-            width: 100%;
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-    
-    # Centered container
-    with st.container():
-        col_spacer_left, col_center, col_spacer_right = st.columns([0.5, 1, 0.5])
-        
-        with col_center:
-            # Title/Logo Box
-            st.markdown(
-                """
-                <div class="auth-box">
-                    <span class="auth-logo">🕷️</span>
-                    <h1 class="auth-title">RoadPulse</h1>
-                    <p class="auth-subtitle">Friendly Neighborhood Road Watch</p>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-            
-            st.markdown("<br>", unsafe_allow_html=True)
-            
-            # Auth choice
-            auth_choice = st.segmented_control(
-                "Choose",
-                ["Sign In", "Sign Up"],
-                selection_mode="single",
-                default="Sign In"
-            )
-            
-            st.markdown("<br>", unsafe_allow_html=True)
-            
-            if auth_choice == "Sign In":
-                if st.session_state.get("_oauth_error"):
-                    st.error(st.session_state._oauth_error)
-                    st.session_state._oauth_error = None
-                
-                login_username = st.text_input("Handle", key="page_login_username", placeholder="your spidey handle")
-                login_password = st.text_input("Password", type="password", key="page_login_password", placeholder="••••••")
-                
-                st.markdown("<br>", unsafe_allow_html=True)
-                
-                col_btn1, col_btn2 = st.columns(2, gap="small")
-                with col_btn1:
-                    if st.button("Sign In", key="page_login_btn", use_container_width=True):
-                        if login_username.strip() and login_password:
-                            if verify_user(login_username.strip(), login_password):
-                                st.session_state.current_user = login_username.strip()
-                                st.rerun()
-                            else:
-                                st.error("❌ Invalid credentials.")
-                        else:
-                            st.error("❌ Enter handle & password.")
-                
-                with col_btn2:
-                    if GOOGLE_OAUTH_CLIENT_ID:
-                        st.link_button("🔵 Google", build_google_auth_url(), use_container_width=True)
-                
-                if st.session_state.get("_pending_google_email"):
-                    st.success(f"✅ {st.session_state._pending_google_email}")
-                    chosen_username = st.text_input("Pick Handle", key="page_google_username_choice")
-                    if st.button("Join Web", key="page_google_join_btn", use_container_width=True):
-                        if not chosen_username.strip():
-                            st.error("Enter username.")
-                        else:
-                            ok, err = create_google_user(chosen_username.strip(), st.session_state._pending_google_email)
-                            if ok:
-                                st.session_state.current_user = chosen_username.strip()
-                                st.session_state._pending_google_email = None
-                                st.rerun()
-                            else:
-                                st.error(err)
-            
-            else:  # Sign Up
-                signup_username = st.text_input("Choose Handle", key="page_signup_username", placeholder="your spidey alias")
-                signup_password = st.text_input("Password", type="password", key="page_signup_password", placeholder="••••••")
-                
-                st.markdown("<br>", unsafe_allow_html=True)
-                
-                col_btn1, col_btn2 = st.columns(2, gap="small")
-                with col_btn1:
-                    if st.button("Create Account", key="page_signup_btn", use_container_width=True):
-                        if not signup_username.strip() or not signup_password:
-                            st.error("❌ Both fields required.")
-                        else:
-                            ok, err = create_user(signup_username.strip(), signup_password)
-                            if ok:
-                                st.session_state.current_user = signup_username.strip()
-                                st.rerun()
-                            else:
-                                st.error(f"❌ {err}")
-                
-                with col_btn2:
-                    if GOOGLE_OAUTH_CLIENT_ID:
-                        st.link_button("🔵 Google", build_google_auth_url(), use_container_width=True)
-    
-    st.stop()
-
 st.sidebar.markdown('<div class="ig-logo">🕷️ RoadPulse</div>', unsafe_allow_html=True)
 
 NAV_ITEMS = ["🏠  Dashboard", "🧭  Map", "👥  Community", "📰  News Feed", "👤  Profile"]
@@ -1540,6 +1360,92 @@ st.session_state.nav_page = _nav_choice
 nav_page = _nav_choice.split("  ", 1)[1].strip()
 
 st.sidebar.markdown("---")
+
+# --------------------------------------------------------------------------
+# SIDEBAR - ACCOUNT
+# --------------------------------------------------------------------------
+if st.session_state.current_user is None:
+    st.sidebar.subheader("🕷️ Web-Watch Sign In")
+
+    if st.session_state.get("_oauth_error"):
+        st.sidebar.error(st.session_state._oauth_error)
+        st.session_state._oauth_error = None
+
+    if st.session_state.get("_pending_google_email"):
+        pending_email = st.session_state._pending_google_email
+        st.sidebar.success(f"Authenticated as {pending_email}")
+        chosen_username = st.sidebar.text_input("Pick a Spidey Handle", key="google_username_choice")
+        if st.sidebar.button("Join the Web"):
+            if not chosen_username.strip():
+                st.sidebar.error("Please enter a username.")
+            else:
+                ok, err = create_google_user(chosen_username.strip(), pending_email)
+                if ok:
+                    st.session_state.current_user = chosen_username.strip()
+                    st.session_state._pending_google_email = None
+                    st.rerun()
+                else:
+                    st.sidebar.error(err)
+    else:
+        if GOOGLE_OAUTH_CLIENT_ID:
+            st.sidebar.link_button("🔵 Sign in with Google", build_google_auth_url())
+        else:
+            st.sidebar.caption("Google sign-in optional.")
+
+        with st.sidebar.expander("Local Citizen Account"):
+            login_tab, signup_tab = st.tabs(["Sign In", "Sign Up"])
+
+            with login_tab:
+                login_username = st.text_input("Handle", key="login_username")
+                login_password = st.text_input("Password", type="password", key="login_password")
+                if st.button("Sign In", key="login_btn"):
+                    if verify_user(login_username.strip(), login_password):
+                        st.session_state.current_user = login_username.strip()
+                        st.rerun()
+                    else:
+                        st.error("Invalid credentials.")
+
+            with signup_tab:
+                signup_username = st.text_input("Choose Handle", key="signup_username")
+                signup_password = st.text_input("Password", type="password", key="signup_password")
+                if st.button("Create Account", key="signup_btn"):
+                    if not signup_username.strip() or not signup_password:
+                        st.error("Both fields required.")
+                    else:
+                        ok, err = create_user(signup_username.strip(), signup_password)
+                        if ok:
+                            st.session_state.current_user = signup_username.strip()
+                            st.rerun()
+                        else:
+                            st.error(err)
+else:
+    score = get_civic_score(st.session_state.current_user)
+    st.sidebar.markdown(
+        f"""
+        <div class="spidey-profile-card">
+            <div style="font-weight:800; font-size:1.05rem; margin-bottom:4px;">🕷️ {st.session_state.current_user}</div>
+            <div style="font-size:12px; font-weight:600; color:#FF8099;">{civic_badge(score)}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    if st.sidebar.button("Log Out"):
+        st.session_state.current_user = None
+        st.rerun()
+
+    # Floating top-right civic score badge (Instagram-style top bar)
+    st.markdown(
+        f"""
+        <div class="ig-top-score">
+            <span class="star">★</span>
+            <div>
+                <div class="num">{score}</div>
+                <div class="lbl">Civic Score</div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 # --------------------------------------------------------------------------
 # MAIN UI
@@ -1685,14 +1591,14 @@ elif nav_page == "Map":
             search_query = st.text_input("Find Neighborhood / Street", placeholder="e.g. T Nagar, Chennai")
             if st.button("🔎 Locate"):
                 if search_query.strip():
-                    result, err = geocode_location(search_query.strip())
+                    result = geocode_location(search_query.strip())
                     if result:
                         st.session_state.clicked_lat, st.session_state.clicked_lon = result
                         st.session_state.segment_coords = None
                         st.session_state.map_center = list(result)
                         st.success(f"Found: {result[0]:.4f}, {result[1]:.4f}")
                     else:
-                        st.error(f"Location not found. {err or ''}".strip())
+                        st.error("Location not found.")
                 else:
                     st.warning("Enter a location to search.")
     
