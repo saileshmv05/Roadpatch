@@ -1278,43 +1278,47 @@ def build_civic_complaint(row, municipality_info, is_known_portal):
 
 
 def geocode_location(query):
-    url = "https://nominatim.openstreetmap.org/search?" + urllib.parse.urlencode(
-        {"q": query, "format": "json", "limit": 1}
-    )
-    # Nominatim's usage policy requires a real identifying User-Agent (contact info
-    # included). Replace the email below with a real one for your deployed app --
-    # a generic/missing contact is one of the most common reasons Nominatim starts
-    # silently 403-ing requests from shared hosts like Streamlit Community Cloud.
-    request = urllib.request.Request(
-        url,
-        headers={"User-Agent": "RoadPulse-Spidey-Watch/3.0 (contact: youremail@example.com)"},
+    if not GOOGLE_MAPS_API_KEY:
+        return None, "No Google Maps API key configured (set GOOGLE_MAPS_API_KEY)."
+    url = "https://maps.googleapis.com/maps/api/geocode/json?" + urllib.parse.urlencode(
+        {"address": query, "key": GOOGLE_MAPS_API_KEY}
     )
     try:
-        with urllib.request.urlopen(request, timeout=6) as response:
+        with urllib.request.urlopen(url, timeout=6) as response:
             data = json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as e:
-        return None, f"Search server returned HTTP {e.code} (likely rate-limited/blocked)."
     except (urllib.error.URLError, TimeoutError) as e:
         return None, f"Couldn't reach the search server: {e}"
     except ValueError as e:
         return None, f"Bad response from search server: {e}"
-    if not data:
+
+    status = data.get("status")
+    if status == "OK" and data.get("results"):
+        loc = data["results"][0]["geometry"]["location"]
+        return (loc["lat"], loc["lng"]), None
+    if status == "ZERO_RESULTS":
         return None, "No results for that place name."
-    return (float(data[0]["lat"]), float(data[0]["lon"])), None
+    if status == "REQUEST_DENIED":
+        return None, "Google rejected the request — enable the 'Geocoding API' (not just Maps JS) for this key in Google Cloud Console."
+    if status == "OVER_QUERY_LIMIT":
+        return None, "Google geocoding quota/billing limit reached."
+    return None, f"Geocoding failed: {data.get('error_message', status)}"
 
 
 @st.cache_data(ttl=3600)
 def get_location_name(lat, lon):
-    url = "https://nominatim.openstreetmap.org/reverse?" + urllib.parse.urlencode(
-        {"lat": lat, "lon": lon, "format": "json", "zoom": 18, "addressdetails": 0}
+    if not GOOGLE_MAPS_API_KEY:
+        return f"Near {lat:.5f}, {lon:.5f}"
+    url = "https://maps.googleapis.com/maps/api/geocode/json?" + urllib.parse.urlencode(
+        {"latlng": f"{lat},{lon}", "key": GOOGLE_MAPS_API_KEY}
     )
-    request = urllib.request.Request(url, headers={"User-Agent": "RoadPulse-Spidey-Watch/3.0"})
     try:
-        with urllib.request.urlopen(request, timeout=6) as response:
+        with urllib.request.urlopen(url, timeout=6) as response:
             data = json.loads(response.read().decode("utf-8"))
     except (urllib.error.URLError, TimeoutError, ValueError):
         return f"Near {lat:.5f}, {lon:.5f}"
-    return data.get("display_name") or f"Near {lat:.5f}, {lon:.5f}"
+    if data.get("status") == "OK" and data.get("results"):
+        return data["results"][0].get("formatted_address") or f"Near {lat:.5f}, {lon:.5f}"
+    return f"Near {lat:.5f}, {lon:.5f}"
 
 
 def reviews_to_payload(df):
