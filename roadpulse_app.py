@@ -1301,11 +1301,14 @@ def geocode_location(query):
         return (loc["lat"], loc["lng"]), None
     if status == "ZERO_RESULTS":
         return None, "No results for that place name."
-    if status == "REQUEST_DENIED":
-        return None, "Google rejected the request — enable the 'Geocoding API' (not just Maps JS) for this key in Google Cloud Console."
-    if status == "OVER_QUERY_LIMIT":
-        return None, "Google geocoding quota/billing limit reached."
-    return None, f"Geocoding failed: {data.get('error_message', status)}"
+    # Surface Google's own error_message (the real cause: bad key, no
+    # billing, wrong API enabled, referrer restriction, etc.) instead of
+    # guessing -- plus which key source is actually in play, so we can
+    # tell whether GOOGLE_GEOCODING_API_KEY was really picked up or it's
+    # silently falling back to GOOGLE_MAPS_API_KEY.
+    detail = data.get("error_message", "")
+    key_source = "GOOGLE_GEOCODING_API_KEY" if os.environ.get("GOOGLE_GEOCODING_API_KEY") else "GOOGLE_MAPS_API_KEY (fallback)"
+    return None, f"Geocoding failed: {status}{' — ' + detail if detail else ''} [key source: {key_source}]"
 
 
 @st.cache_data(ttl=3600)
