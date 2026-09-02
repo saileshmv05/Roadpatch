@@ -109,6 +109,11 @@ def get_municipality_info(row):
 
 
 GOOGLE_MAPS_API_KEY = os.environ.get("GOOGLE_MAPS_API_KEY", "")
+# Server-side calls (this Python process) send no HTTP Referer header, so a key
+# restricted to "HTTP referrers" for the browser map will be REQUEST_DENIED here
+# even with Geocoding API enabled. Set a second, unrestricted/IP-restricted key
+# via GOOGLE_GEOCODING_API_KEY for geocode_location / get_location_name to use.
+GOOGLE_GEOCODING_API_KEY = os.environ.get("GOOGLE_GEOCODING_API_KEY", GOOGLE_MAPS_API_KEY)
 GOOGLE_OAUTH_CLIENT_ID = os.environ.get("GOOGLE_OAUTH_CLIENT_ID", "")
 GOOGLE_OAUTH_CLIENT_SECRET = os.environ.get("GOOGLE_OAUTH_CLIENT_SECRET", "")
 GOOGLE_OAUTH_REDIRECT_URI = os.environ.get("GOOGLE_OAUTH_REDIRECT_URI", "http://localhost:8501")
@@ -1278,10 +1283,10 @@ def build_civic_complaint(row, municipality_info, is_known_portal):
 
 
 def geocode_location(query):
-    if not GOOGLE_MAPS_API_KEY:
-        return None, "No Google Maps API key configured (set GOOGLE_MAPS_API_KEY)."
+    if not GOOGLE_GEOCODING_API_KEY:
+        return None, "No Google Maps API key configured (set GOOGLE_MAPS_API_KEY or GOOGLE_GEOCODING_API_KEY)."
     url = "https://maps.googleapis.com/maps/api/geocode/json?" + urllib.parse.urlencode(
-        {"address": query, "key": GOOGLE_MAPS_API_KEY}
+        {"address": query, "key": GOOGLE_GEOCODING_API_KEY}
     )
     try:
         with urllib.request.urlopen(url, timeout=6) as response:
@@ -1306,10 +1311,10 @@ def geocode_location(query):
 
 @st.cache_data(ttl=3600)
 def get_location_name(lat, lon):
-    if not GOOGLE_MAPS_API_KEY:
+    if not GOOGLE_GEOCODING_API_KEY:
         return f"Near {lat:.5f}, {lon:.5f}"
     url = "https://maps.googleapis.com/maps/api/geocode/json?" + urllib.parse.urlencode(
-        {"latlng": f"{lat},{lon}", "key": GOOGLE_MAPS_API_KEY}
+        {"latlng": f"{lat},{lon}", "key": GOOGLE_GEOCODING_API_KEY}
     )
     try:
         with urllib.request.urlopen(url, timeout=6) as response:
